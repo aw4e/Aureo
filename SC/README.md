@@ -11,22 +11,21 @@ Aureo is a **Real World Asset (RWA)** protocol built on the **Mantle Network**, 
 
 ## 🔗 Deployed Contracts (Mantle Sepolia)
 
-You can interact with the protocol on the **Mantle Sepolia Testnet** using the following addresses:
+You can interact with the protocol on the **Mantle Sepolia Testnet**.
+*(Update these addresses after your fresh deployment)*
 
 | Contract | Address | Symbol | Decimals |
 | :--- | :--- | :--- | :--- |
-| **AureoRWAPool** | `0x7D62184c94F46048014C89652690732d5bac5B3F` | - | - |
-| **MockUSDC** | `0x20f58AE33a676969B29721E09c7B8fD67B2EB212` | `mUSDC` | 6 |
-| **MockGold** | `0xE4D1eE878Ea7821777A648633565de9cD7633C34` | `mGOLD` | 18 |
-
-*Add these token addresses to your wallet (MetaMask, Coinbase Wallet, etc.) to view your balances.*
+| **AureoRWAPool** | `[DEPLOYED_POOL_ADDRESS]` | - | - |
+| **MockUSDC** | `[DEPLOYED_USDC_ADDRESS]` | `mUSDC` | 6 |
+| **MockGold** | `[DEPLOYED_GOLD_ADDRESS]` | `mGOLD` | 18 |
 
 ## 🏗 Architecture
 
 The protocol consists of three main components:
 
 1.  **AureoRWAPool**: The core contract managing liquidity, price fetching, and token minting/burning.
-2.  **MockGold (mGOLD)**: An ERC20 token representing the tokenized gold. It has `MINTER_ROLE` controlled by the Pool.
+2.  **MockGold (mGOLD)**: An ERC20 token representing the tokenized gold.
 3.  **MockUSDC**: A standard ERC20 stablecoin used as collateral/payment for minting gold.
 
 ## 📜 Smart Contract Reference
@@ -48,10 +47,6 @@ The main interaction point for users.
     *   **Description:** A view function that fetches the latest Gold price from the Pyth Network Oracle.
     *   **Logic:** Normalizes the price exponent to standard 18 decimals for precision in calculations. Ensures price data is no older than 60 seconds.
 
-*   **`emergencyWithdraw(address _token)`**
-    *   **Description:** Admin-only function.
-    *   **Logic:** Allows the owner to withdraw any tokens stuck in the contract (e.g., for migration or emergency recovery).
-
 ### 2. MockTokens.sol
 
 *   **`MockUSDC`**
@@ -59,8 +54,7 @@ The main interaction point for users.
     *   **Function `mint(address to, uint256 amount)`:** Public faucet function. Allows anyone to mint free testnet USDC for testing the protocol.
 
 *   **`MockGold`**
-    *   **Type:** ERC20 with Access Control (18 Decimals).
-    *   **Role `MINTER_ROLE`:** Restricted permission. Only addresses with this role (i.e., the `AureoRWAPool`) can mint or burn tokens. This ensures `mGOLD` supply is always fully backed by the Pool's logic.
+    *   **Type:** ERC20 (18 Decimals).
 
 ## 🛠 Prerequisites
 
@@ -73,8 +67,8 @@ Ensure you have the following installed:
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/YOUR_USERNAME/aureo.git
-    cd aureo
+    git clone https://github.com/Nicholandn22/Aureo.git
+    cd Aureo/SC
     ```
 
 2.  **Install dependencies:**
@@ -89,7 +83,7 @@ Ensure you have the following installed:
 
 ## ⚙️ Configuration
 
-Create a `.env` file in the root directory based on the example below:
+Create a `.env` file in the `SC` directory based on the example below:
 
 ```ini
 # Deployment Wallet
@@ -97,23 +91,17 @@ PRIVATE_KEY=0xYourPrivateKeyHere...
 
 # Network RPCs
 RPC_URL=https://rpc.sepolia.mantle.xyz
-# RPC_URL_MAINNET=https://rpc.mantle.xyz
 
 # Verification (Optional)
-ETHERSCAN_API_KEY=YourExplorerApiKey...
-
-# Deployed Addresses (For multi-stage deployment)
-USDC_ADDRESS=0x...
-GOLD_ADDRESS=0x...
+MANTLESCAN_API_KEY=YourExplorerApiKey...
 ```
 
 ## ⛓ Deployment (Mantle Sepolia Testnet)
 
-Due to gas limits on testnets, deployment is best done in stages.
+Deploy the entire protocol (USDC, Gold, and Pool) using the provided script.
 
-### Step 1: Deploy Mock USDC
 ```bash
-source .env && forge script script/script/Deploy01_MockUSDC.s.sol:DeployMockUSDC \
+source .env && forge script script/script/DeployAureo.s.sol:DeployAureo \
 --rpc-url $RPC_URL \
 --broadcast \
 --chain-id 5003 \
@@ -122,32 +110,8 @@ source .env && forge script script/script/Deploy01_MockUSDC.s.sol:DeployMockUSDC
 --verifier blockscout \
 --verifier-url https://explorer.sepolia.mantle.xyz/api
 ```
-*Copy the deployed USDC address and save it to `USDC_ADDRESS` in `.env`.*
 
-### Step 2: Deploy Mock Gold
-```bash
-source .env && forge script script/script/Deploy02_MockGold.s.sol:DeployMockGold \
---rpc-url $RPC_URL \
---broadcast \
---chain-id 5003 \
---legacy \
---verify \
---verifier blockscout \
---verifier-url https://explorer.sepolia.mantle.xyz/api
-```
-*Copy the deployed mGOLD address and save it to `GOLD_ADDRESS` in `.env`.*
-
-### Step 3: Deploy Pool & Setup Permissions
-```bash
-source .env && forge script script/script/Deploy03_Pool.s.sol:DeployPool \
---rpc-url $RPC_URL \
---broadcast \
---chain-id 5003 \
---legacy \
---verify \
---verifier blockscout \
---verifier-url https://explorer.sepolia.mantle.xyz/api
-```
+*Note: The script automatically provides initial liquidity to the pool.*
 
 ## 🧪 Testing
 
