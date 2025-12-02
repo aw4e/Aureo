@@ -45,13 +45,19 @@ contract AureoRWAPool is Ownable {
         PythStructs.Price memory price = pyth.getPriceNoOlderThan(goldPriceId, 60);
         require(price.price > 0, "Invalid Oracle Price");
 
-        // Konversi: Price * 10^(18 + expo)
-        // Perbaikan: Handle negative expo dengan benar sebelum casting ke uint256
+        int256 priceVal = int256(price.price);
         int256 expo = int256(price.expo);
-        // Asumsi: expo tidak akan lebih kecil dari -18 (Pyth biasanya -8)
-        uint256 factor = 10 ** uint256(18 + expo); 
         
-        return uint256(int256(price.price)) * factor;
+        // Target decimals = 18
+        // We want result = price * 10^expo * 10^18 = price * 10^(expo + 18)
+        
+        int256 requiredDecimals = 18 + expo;
+
+        if (requiredDecimals >= 0) {
+            return uint256(priceVal) * (10 ** uint256(requiredDecimals));
+        } else {
+            return uint256(priceVal) / (10 ** uint256(-requiredDecimals));
+        }
     }
 
     // --- FITUR 1: BELI EMAS (USDC -> mGOLD) ---
