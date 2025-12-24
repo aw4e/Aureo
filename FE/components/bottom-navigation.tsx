@@ -1,10 +1,10 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { Home, Clock, CreditCard, User, Scan } from 'lucide-react';
+import { Home, Clock, Brain, User, Scan } from 'lucide-react';
 
 interface BottomNavigationProps {
-    activeTab: 'home' | 'history' | 'pay' | 'cards' | 'profile';
+    activeTab: 'home' | 'history' | 'pay' | 'agent' | 'profile';
 }
 
 export function BottomNavigation({ activeTab }: BottomNavigationProps) {
@@ -14,7 +14,7 @@ export function BottomNavigation({ activeTab }: BottomNavigationProps) {
         { id: 'home', label: 'Home', icon: Home, path: '/dashboard' },
         { id: 'history', label: 'History', icon: Clock, path: '/dashboard/history' },
         { id: 'pay', label: 'Pay', icon: Scan, path: '/dashboard/pay' },
-        { id: 'cards', label: 'Cards', icon: CreditCard, path: '/dashboard/cards' },
+        { id: 'agent', label: 'Agent', icon: Brain, path: '/dashboard/agent' },
         { id: 'profile', label: 'Profile', icon: User, path: '/dashboard/profile' },
     ];
 

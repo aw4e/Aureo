@@ -5,7 +5,7 @@ import { BottomNavigation } from './bottom-navigation';
 
 interface MobileLayoutProps {
     children: ReactNode;
-    activeTab?: 'home' | 'history' | 'pay' | 'cards' | 'profile';
+    activeTab?: 'home' | 'history' | 'pay' | 'agent' | 'profile';
     showNav?: boolean;
 }
 

@@ -34,8 +34,8 @@ export default function LandingPage() {
     },
     {
       icon: Shield,
-      title: 'Gold Backed',
-      description: 'Real gold RWA protection',
+      title: 'x402 Protocol',
+      description: 'Pay-per-use AI with USDC micropayments',
       color: 'text-blue-500',
       bgColor: 'bg-blue-100 dark:bg-blue-500/20',
     },
