@@ -15,9 +15,9 @@ You can interact with the protocol on the **Mantle Sepolia Testnet**.
 
 | Contract | Address | Symbol | Decimals |
 | :--- | :--- | :--- | :--- |
-| **AureoRWAPool** | `0x475F5c184D23D5839123e7CDB23273eF0470C018` | - | - |
-| **MockUSDC** | `0x53b8e9e6513A2e7A4d23F8F9BFe3F5985C9788e4` | `mUSDC` | 6 |
-| **MockGold** | `0x6830999D9173B235dF6ac8c9068c4235fd58f532` | `mGOLD` | 18 |
+| **AureoRWAPool** | `0x7D62184c94F46048014C89652690732d5bac5B3F` | - | - |
+| **MockUSDC** | `0x20f58AE33a676969B29721E09c7B8fD67B2EB212` | `mUSDC` | 6 |
+| **MockGold** | `0xE4D1eE878Ea7821777A648633565de9cD7633C34` | `mGOLD` | 18 |
 
 *Note: Due to inactive Pyth Gold Feed on testnet, the current deployment uses ETH/USD price feed for demonstration.*
 
@@ -34,9 +34,9 @@ Set up your terminal with the necessary environment variables and contract addre
 source .env
 
 # 2. Set Contract Addresses as Variables (Shortcuts)
-export USDC=0x53b8e9e6513A2e7A4d23F8F9BFe3F5985C9788e4
-export GOLD=0x6830999D9173B235dF6ac8c9068c4235fd58f532
-export POOL=0x475F5c184D23D5839123e7CDB23273eF0470C018
+export USDC=0x20f58AE33a676969B29721E09c7B8fD67B2EB212
+export GOLD=0xE4D1eE878Ea7821777A648633565de9cD7633C34
+export POOL=0x7D62184c94F46048014C89652690732d5bac5B3F
 
 # 3. Set your Wallet Address (for checking balances)
 export MY_WALLET=$(cast wallet address --private-key $PRIVATE_KEY)
