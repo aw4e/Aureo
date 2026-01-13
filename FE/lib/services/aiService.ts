@@ -75,11 +75,11 @@ ANALYZE and respond in this exact JSON format only (no markdown, just JSON):
 }`;
 
     const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
+      model: "gemini-2.5-flash",
       generationConfig: {
         temperature: 0.7,
         maxOutputTokens: 500,
-      }
+      },
     });
 
     const result = await model.generateContent(prompt);
@@ -145,11 +145,11 @@ Provide a helpful, concise response (2-4 sentences). Be friendly but professiona
 If asked about predictions, be cautious and mention that past performance doesn't guarantee future results.`;
 
     const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
+      model: "gemini-2.5-flash",
       generationConfig: {
         temperature: 0.8,
         maxOutputTokens: 300,
-      }
+      },
     });
 
     const result = await model.generateContent(prompt);
@@ -170,11 +170,11 @@ export async function getMarketInsight(goldPrice: number): Promise<string> {
 Focus on actionable information for investors. Be concise and professional.`;
 
     const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
+      model: "gemini-2.5-flash",
       generationConfig: {
         temperature: 0.6,
         maxOutputTokens: 100,
-      }
+      },
     });
 
     const result = await model.generateContent(prompt);
