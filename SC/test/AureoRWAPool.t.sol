@@ -214,7 +214,7 @@ contract AureoRWAPoolTest is Test {
 
     function test_11_PriceWithExtremeExponentNegative() public {
         // Price with expo = -18
-        setOraclePrice(2000e18, -18, uint64(block.timestamp));
+        setOraclePrice(2000, -18, uint64(block.timestamp));
 
         vm.startPrank(alice);
         usdc.approve(address(pool), 1000 * 1e6);

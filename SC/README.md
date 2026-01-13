@@ -15,9 +15,9 @@ You can interact with the protocol on the **Mantle Sepolia Testnet**.
 
 | Contract | Address | Symbol | Decimals |
 | :--- | :--- | :--- | :--- |
-| **AureoRWAPool** | `0x7D62184c94F46048014C89652690732d5bac5B3F` | - | - |
-| **MockUSDC** | `0x20f58AE33a676969B29721E09c7B8fD67B2EB212` | `mUSDC` | 6 |
-| **MockGold** | `0xE4D1eE878Ea7821777A648633565de9cD7633C34` | `mGOLD` | 18 |
+| **AureoRWAPool** | [`0x6D7be4B3d23C55d8A0829114b99DAEb4915a2A17`](https://sepolia.mantlescan.xyz/address/0x6d7be4b3d23c55d8a0829114b99daeb4915a2a17) | - | - |
+| **MockUSDC** | [`0x727cc1FdcC8FB1Bf396FCEaE40e3Ba8c90F81F45`](https://sepolia.mantlescan.xyz/address/0x727cc1fdcc8fb1bf396fceae40e3ba8c90f81f45) | `mUSDC` | 6 |
+| **MockGold** | [`0x012aDFBCC46187Ef30dc25130F969B94E0c9a2e5`](https://sepolia.mantlescan.xyz/address/0x012adfbcc46187ef30dc25130f969b94e0c9a2e5) | `mGOLD` | 18 |
 
 *Note: Due to inactive Pyth Gold Feed on testnet, the current deployment uses ETH/USD price feed for demonstration.*
 
@@ -34,9 +34,9 @@ Set up your terminal with the necessary environment variables and contract addre
 source .env
 
 # 2. Set Contract Addresses as Variables (Shortcuts)
-export USDC=0x20f58AE33a676969B29721E09c7B8fD67B2EB212
-export GOLD=0xE4D1eE878Ea7821777A648633565de9cD7633C34
-export POOL=0x7D62184c94F46048014C89652690732d5bac5B3F
+export USDC=0x727cc1FdcC8FB1Bf396FCEaE40e3Ba8c90F81F45
+export GOLD=0x012aDFBCC46187Ef30dc25130F969B94E0c9a2e5
+export POOL=0x6D7be4B3d23C55d8A0829114b99DAEb4915a2A17
 
 # 3. Set your Wallet Address (for checking balances)
 export MY_WALLET=$(cast wallet address --private-key $PRIVATE_KEY)
@@ -332,6 +332,11 @@ This project is licensed under the **MIT License**.
         "name": "_usdcAmount",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "_minGoldOut",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -428,6 +433,11 @@ This project is licensed under the **MIT License**.
     "inputs": [
       {
         "name": "_goldAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "_minUsdcOut",
         "type": "uint256",
         "internalType": "uint256"
       }
