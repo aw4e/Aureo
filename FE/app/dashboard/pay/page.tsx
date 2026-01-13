@@ -1,11 +1,14 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { usePrivy } from '@privy-io/react-auth';
+import { usePrivy, useWallets } from '@privy-io/react-auth';
+import { ethers } from 'ethers';
 import { MobileLayout } from '@/components/mobile-layout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useAureoContract } from '@/lib/hooks/useAureoContract';
+import { CONTRACT_ADDRESSES, CONTRACT_ABIS } from '@/lib/services/contractService';
 import {
     ArrowLeft,
     QrCode,
@@ -17,26 +20,49 @@ import {
     Check,
     AlertCircle,
     Loader2,
-    ChevronRight
+    ChevronRight,
+    ExternalLink
 } from 'lucide-react';
 
 type PayMode = 'scan' | 'send';
 
-export default function PayPage() {
+interface RecentRecipient {
+    address: string;
+    name?: string;
+    lastUsed: Date;
+}
+
+function PayPageContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const { user, ready, authenticated } = usePrivy();
+    const { wallets } = useWallets();
+    const { balances, fetchBalances } = useAureoContract();
 
-    const [mode, setMode] = useState<PayMode>((searchParams.get('mode') as PayMode) || 'scan');
+    const [mode, setMode] = useState<PayMode>((searchParams.get('mode') as PayMode) || 'send');
     const [amount, setAmount] = useState('');
     const [recipientAddress, setRecipientAddress] = useState('');
     const [isScanning, setIsScanning] = useState(false);
     const [isSending, setIsSending] = useState(false);
     const [copied, setCopied] = useState(false);
     const [error, setError] = useState('');
+    const [txHash, setTxHash] = useState<string | null>(null);
+    const [recentRecipients, setRecentRecipients] = useState<RecentRecipient[]>([]);
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const streamRef = useRef<MediaStream | null>(null);
+
+    // Load recent recipients from localStorage
+    useEffect(() => {
+        const saved = localStorage.getItem('aureo_recent_recipients');
+        if (saved) {
+            try {
+                setRecentRecipients(JSON.parse(saved));
+            } catch {
+                // Ignore parse errors
+            }
+        }
+    }, []);
 
     // Redirect if not authenticated
     useEffect(() => {
@@ -79,6 +105,16 @@ export default function PayPage() {
         setIsScanning(false);
     };
 
+    const saveRecentRecipient = (address: string) => {
+        const existing = recentRecipients.filter(r => r.address.toLowerCase() !== address.toLowerCase());
+        const updated: RecentRecipient[] = [
+            { address, lastUsed: new Date() },
+            ...existing.slice(0, 4) // Keep only 5 recent
+        ];
+        setRecentRecipients(updated);
+        localStorage.setItem('aureo_recent_recipients', JSON.stringify(updated));
+    };
+
     const handleSend = async () => {
         if (!recipientAddress || !amount) {
             setError('Please enter recipient address and amount');
@@ -86,7 +122,7 @@ export default function PayPage() {
         }
 
         // Validate EVM address
-        if (!recipientAddress.match(/^0x[a-fA-F0-9]{40}$/)) {
+        if (!ethers.isAddress(recipientAddress)) {
             setError('Invalid EVM wallet address');
             return;
         }
@@ -97,17 +133,71 @@ export default function PayPage() {
             return;
         }
 
+        if (numAmount > balances.usdc) {
+            setError(`Insufficient balance. You have $${balances.usdc.toFixed(2)} USDC`);
+            return;
+        }
+
+        // Don't allow sending to self
+        if (recipientAddress.toLowerCase() === user?.wallet?.address?.toLowerCase()) {
+            setError('Cannot send to your own address');
+            return;
+        }
+
         setIsSending(true);
         setError('');
+        setTxHash(null);
 
         try {
-            // Simulate transaction - replace with actual USDC transfer logic
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            // Get the active wallet
+            const activeWallet = wallets.find(w => w.walletClientType === 'privy') || wallets[0];
+            if (!activeWallet) {
+                throw new Error('No wallet connected');
+            }
 
-            // Navigate to success page or show success state
-            router.push(`/dashboard/pay/success?amount=${amount}&to=${recipientAddress}`);
-        } catch {
-            setError('Transaction failed. Please try again.');
+            // Get the ethereum provider from Privy wallet
+            const provider = await activeWallet.getEthereumProvider();
+            const ethersProvider = new ethers.BrowserProvider(provider);
+            const signer = await ethersProvider.getSigner();
+
+            // Create USDC contract instance
+            const usdcContract = new ethers.Contract(
+                CONTRACT_ADDRESSES.M_USDC,
+                CONTRACT_ABIS.M_USDC,
+                signer
+            );
+
+            // Get decimals and parse amount
+            const decimals = await usdcContract.decimals();
+            const amountInWei = ethers.parseUnits(numAmount.toString(), decimals);
+
+            // Execute transfer
+            console.log(`Sending ${numAmount} USDC to ${recipientAddress}...`);
+            const tx = await usdcContract.transfer(recipientAddress, amountInWei);
+            console.log('Transaction sent:', tx.hash);
+
+            // Wait for confirmation
+            const receipt = await tx.wait();
+            console.log('Transaction confirmed:', receipt.hash);
+
+            setTxHash(receipt.hash);
+            saveRecentRecipient(recipientAddress);
+
+            // Refresh balances
+            await fetchBalances();
+
+            // Navigate to success page
+            router.push(`/dashboard/pay/success?amount=${amount}&to=${recipientAddress}&tx=${receipt.hash}`);
+        } catch (err: unknown) {
+            console.error('Transfer error:', err);
+            const errorMessage = err instanceof Error ? err.message : 'Transaction failed';
+            if (errorMessage.includes('user rejected')) {
+                setError('Transaction was rejected');
+            } else if (errorMessage.includes('insufficient')) {
+                setError('Insufficient balance for transaction');
+            } else {
+                setError('Transaction failed. Please try again.');
+            }
         } finally {
             setIsSending(false);
         }
@@ -180,6 +270,12 @@ export default function PayPage() {
                         <ArrowLeft className="w-5 h-5" />
                     </button>
                     <h1 className="text-xl font-semibold">Pay</h1>
+                </div>
+
+                {/* Balance Display */}
+                <div className="bg-white/10 rounded-2xl p-4 mb-4">
+                    <p className="text-white/70 text-sm">Available USDC</p>
+                    <p className="text-3xl font-bold">${balances.usdc.toFixed(2)}</p>
                 </div>
 
                 {/* Mode Toggle */}
@@ -276,16 +372,22 @@ export default function PayPage() {
                                         }}
                                         placeholder="0x..."
                                         className="pl-12 py-6 text-base rounded-xl font-mono"
+                                        disabled={isSending}
                                     />
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    Paste or scan any EVM wallet address
+                                    Enter any EVM wallet address (Mantle Sepolia)
                                 </p>
                             </div>
 
                             {/* Amount */}
                             <div className="space-y-2">
-                                <label className="text-sm font-medium">Amount (USDC)</label>
+                                <div className="flex items-center justify-between">
+                                    <label className="text-sm font-medium">Amount (USDC)</label>
+                                    <span className="text-xs text-muted-foreground">
+                                        Balance: ${balances.usdc.toFixed(2)}
+                                    </span>
+                                </div>
                                 <div className="relative">
                                     <span className="absolute left-4 top-1/2 -translate-y-1/2 text-lg font-medium text-muted-foreground">
                                         $
@@ -299,6 +401,7 @@ export default function PayPage() {
                                         }}
                                         placeholder="0.00"
                                         className="pl-10 py-6 text-2xl font-semibold rounded-xl"
+                                        disabled={isSending}
                                     />
                                 </div>
 
@@ -308,10 +411,11 @@ export default function PayPage() {
                                         <button
                                             key={amt}
                                             onClick={() => setAmount(amt.toString())}
+                                            disabled={amt > balances.usdc || isSending}
                                             className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${amount === amt.toString()
                                                 ? 'bg-primary text-white'
                                                 : 'bg-muted hover:bg-secondary text-foreground'
-                                                }`}
+                                                } ${amt > balances.usdc ? 'opacity-50 cursor-not-allowed' : ''}`}
                                         >
                                             ${amt}
                                         </button>
@@ -324,6 +428,22 @@ export default function PayPage() {
                                 <div className="flex items-center gap-2 text-red-500 text-sm bg-red-50 dark:bg-red-500/10 p-3 rounded-xl">
                                     <AlertCircle className="w-4 h-4 shrink-0" />
                                     {error}
+                                </div>
+                            )}
+
+                            {/* Transaction Hash */}
+                            {txHash && (
+                                <div className="flex items-center gap-2 text-green-500 text-sm bg-green-50 dark:bg-green-500/10 p-3 rounded-xl">
+                                    <Check className="w-4 h-4 shrink-0" />
+                                    <span>Sent!</span>
+                                    <a
+                                        href={`https://explorer.sepolia.mantle.xyz/tx/${txHash}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="flex items-center gap-1 underline"
+                                    >
+                                        View <ExternalLink className="w-3 h-3" />
+                                    </a>
                                 </div>
                             )}
 
@@ -348,37 +468,53 @@ export default function PayPage() {
                         </div>
 
                         {/* Recent Recipients */}
-                        <div className="bg-card rounded-2xl p-4 border border-border">
-                            <h3 className="font-semibold mb-3 px-2">Recent</h3>
-                            <div className="space-y-1">
-                                {[
-                                    { address: '0x742d...Fa89', name: 'Alice' },
-                                    { address: '0x8912...1234', name: 'Bob' },
-                                ].map((recipient, i) => (
-                                    <button
-                                        key={i}
-                                        onClick={() => setRecipientAddress(recipient.address)}
-                                        className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-muted transition-colors"
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center text-white font-medium">
-                                                {recipient.name[0]}
+                        {recentRecipients.length > 0 && (
+                            <div className="bg-card rounded-2xl p-4 border border-border">
+                                <h3 className="font-semibold mb-3 px-2">Recent</h3>
+                                <div className="space-y-1">
+                                    {recentRecipients.map((recipient, i) => (
+                                        <button
+                                            key={i}
+                                            onClick={() => setRecipientAddress(recipient.address)}
+                                            className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-muted transition-colors"
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-amber-500 flex items-center justify-center text-white font-medium">
+                                                    {recipient.address.slice(2, 4).toUpperCase()}
+                                                </div>
+                                                <div className="text-left">
+                                                    <p className="font-mono text-sm">
+                                                        {recipient.address.slice(0, 6)}...{recipient.address.slice(-4)}
+                                                    </p>
+                                                </div>
                                             </div>
-                                            <div className="text-left">
-                                                <p className="font-medium">{recipient.name}</p>
-                                                <p className="text-sm text-muted-foreground font-mono">
-                                                    {recipient.address}
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <ChevronRight className="w-5 h-5 text-muted-foreground" />
-                                    </button>
-                                ))}
+                                            <ChevronRight className="w-5 h-5 text-muted-foreground" />
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
+                        )}
+
+                        {/* Network Info */}
+                        <div className="bg-muted/50 rounded-xl p-3 text-center text-xs text-muted-foreground">
+                            Sending on <span className="font-medium">Mantle Sepolia Testnet</span>
                         </div>
                     </>
                 )}
             </div>
         </MobileLayout>
+    );
+}
+
+// Wrap with Suspense for useSearchParams SSR compatibility
+export default function PayPage() {
+    return (
+        <Suspense fallback={
+            <div className="min-h-screen flex items-center justify-center bg-background">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+            </div>
+        }>
+            <PayPageContent />
+        </Suspense>
     );
 }

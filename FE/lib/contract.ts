@@ -1,27 +1,14 @@
+/**
+ * @deprecated Use lib/hooks/useAureoContract.ts instead for React components
+ * This file is kept for backwards compatibility
+ */
+
 import { ethers, Eip1193Provider } from 'ethers';
+import { CONTRACT_ADDRESSES, CONTRACT_ABIS } from './services/contractService';
 
-const AUREO_POOL_ADDRESS = process.env.NEXT_PUBLIC_AUREO_POOL_ADDRESS || '';
-const IDRX_TOKEN_ADDRESS = process.env.NEXT_PUBLIC_IDRX_TOKEN_ADDRESS || '';
-const GOLD_TOKEN_ADDRESS = process.env.NEXT_PUBLIC_GOLD_TOKEN_ADDRESS || '';
-
-const AUREO_POOL_ABI = [
-  'function depositIDRX(uint256 amount) external',
-  'function withdrawToIDRX(uint256 goldAmount) external',
-  'function getGoldBalance(address user) external view returns (uint256)',
-  'function getIDRXPending(address user) external view returns (uint256)',
-  'function executeSmartBuy(address user, uint256 idrxAmount) external',
-  'event Deposit(address indexed user, uint256 idrxAmount)',
-  'event Withdraw(address indexed user, uint256 goldAmount, uint256 idrxReceived)',
-  'event SmartBuy(address indexed user, uint256 idrxSpent, uint256 goldReceived)',
-];
-
-const ERC20_ABI = [
-  'function approve(address spender, uint256 amount) external returns (bool)',
-  'function allowance(address owner, address spender) external view returns (uint256)',
-  'function balanceOf(address account) external view returns (uint256)',
-  'function decimals() external view returns (uint8)',
-];
-
+/**
+ * @deprecated Use useAureoContract hook instead
+ */
 export class ContractService {
   private provider: ethers.BrowserProvider | null = null;
   private signer: ethers.Signer | null = null;
@@ -31,82 +18,87 @@ export class ContractService {
     this.signer = await this.provider.getSigner();
   }
 
-  async getIDRXContract() {
+  async getUSDCContract() {
     if (!this.signer) throw new Error('Wallet not connected');
-    return new ethers.Contract(IDRX_TOKEN_ADDRESS, ERC20_ABI, this.signer);
+    return new ethers.Contract(CONTRACT_ADDRESSES.M_USDC, CONTRACT_ABIS.M_USDC, this.signer);
   }
 
   async getGoldContract() {
     if (!this.signer) throw new Error('Wallet not connected');
-    return new ethers.Contract(GOLD_TOKEN_ADDRESS, ERC20_ABI, this.signer);
+    return new ethers.Contract(CONTRACT_ADDRESSES.M_GOLD, CONTRACT_ABIS.M_GOLD, this.signer);
   }
 
   async getAureoPoolContract() {
     if (!this.signer) throw new Error('Wallet not connected');
-    return new ethers.Contract(AUREO_POOL_ADDRESS, AUREO_POOL_ABI, this.signer);
+    return new ethers.Contract(CONTRACT_ADDRESSES.AUREO_POOL, CONTRACT_ABIS.AUREO_POOL, this.signer);
   }
 
-  async approveIDRX(amount: string) {
-    const idrxContract = await this.getIDRXContract();
-    const decimals = await idrxContract.decimals();
+  async approveUSDC(amount: string) {
+    const usdcContract = await this.getUSDCContract();
+    const decimals = await usdcContract.decimals();
     const amountInWei = ethers.parseUnits(amount, decimals);
 
-    const tx = await idrxContract.approve(AUREO_POOL_ADDRESS, amountInWei);
+    const tx = await usdcContract.approve(CONTRACT_ADDRESSES.AUREO_POOL, amountInWei);
     await tx.wait();
     return tx.hash;
   }
 
-  async depositIDRX(amount: string) {
+  async buyGold(amount: string) {
     const aureoPool = await this.getAureoPoolContract();
-    const idrxContract = await this.getIDRXContract();
-    const decimals = await idrxContract.decimals();
+    const usdcContract = await this.getUSDCContract();
+    const decimals = await usdcContract.decimals();
     const amountInWei = ethers.parseUnits(amount, decimals);
 
-    const allowance = await idrxContract.allowance(
+    const allowance = await usdcContract.allowance(
       await this.signer!.getAddress(),
-      AUREO_POOL_ADDRESS
+      CONTRACT_ADDRESSES.AUREO_POOL
     );
 
     if (allowance < amountInWei) {
-      await this.approveIDRX(amount);
+      await this.approveUSDC(amount);
     }
 
-    const tx = await aureoPool.depositIDRX(amountInWei);
+    const tx = await aureoPool.buyGold(amountInWei);
     await tx.wait();
     return tx.hash;
   }
 
-  async withdrawToIDRX(goldAmount: string) {
+  async sellGold(goldAmount: string) {
     const aureoPool = await this.getAureoPoolContract();
     const goldContract = await this.getGoldContract();
-    const decimals = await goldContract.decimals();
-    const amountInWei = ethers.parseUnits(goldAmount, decimals);
+    const amountInWei = ethers.parseUnits(goldAmount, 18);
 
-    const tx = await aureoPool.withdrawToIDRX(amountInWei);
+    const allowance = await goldContract.allowance(
+      await this.signer!.getAddress(),
+      CONTRACT_ADDRESSES.AUREO_POOL
+    );
+
+    if (allowance < amountInWei) {
+      const approveTx = await goldContract.approve(CONTRACT_ADDRESSES.AUREO_POOL, amountInWei);
+      await approveTx.wait();
+    }
+
+    const tx = await aureoPool.sellGold(amountInWei);
     await tx.wait();
     return tx.hash;
   }
 
   async getGoldBalance(address: string): Promise<string> {
-    const aureoPool = await this.getAureoPoolContract();
-    const balance = await aureoPool.getGoldBalance(address);
     const goldContract = await this.getGoldContract();
-    const decimals = await goldContract.decimals();
-    return ethers.formatUnits(balance, decimals);
+    const balance = await goldContract.balanceOf(address);
+    return ethers.formatUnits(balance, 18);
   }
 
-  async getIDRXPending(address: string): Promise<string> {
+  async getGoldPrice(): Promise<string> {
     const aureoPool = await this.getAureoPoolContract();
-    const pending = await aureoPool.getIDRXPending(address);
-    const idrxContract = await this.getIDRXContract();
-    const decimals = await idrxContract.decimals();
-    return ethers.formatUnits(pending, decimals);
+    const price = await aureoPool.getGoldPrice18Decimals();
+    return ethers.formatUnits(price, 18);
   }
 
-  async getIDRXBalance(address: string): Promise<string> {
-    const idrxContract = await this.getIDRXContract();
-    const balance = await idrxContract.balanceOf(address);
-    const decimals = await idrxContract.decimals();
+  async getUSDCBalance(address: string): Promise<string> {
+    const usdcContract = await this.getUSDCContract();
+    const balance = await usdcContract.balanceOf(address);
+    const decimals = await usdcContract.decimals();
     return ethers.formatUnits(balance, decimals);
   }
 }

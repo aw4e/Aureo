@@ -3,11 +3,12 @@ import { deposits } from '../../route';
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { walletAddress: string } }
+  { params }: { params: Promise<{ walletAddress: string }> }
 ) {
   try {
+    const { walletAddress } = await params;
     const userDeposits = deposits
-      .filter((d) => d.walletAddress === params.walletAddress.toLowerCase())
+      .filter((d) => d.walletAddress === walletAddress.toLowerCase())
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
     return NextResponse.json({

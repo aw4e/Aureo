@@ -15,7 +15,7 @@ const AUREO_POOL_ADDRESS = process.env.NEXT_PUBLIC_AUREO_POOL_ADDRESS || '0x475F
 const USDC_ADDRESS = process.env.NEXT_PUBLIC_USDC_ADDRESS || '0x53b8e9e6513A2e7A4d23F8F9BFe3F5985C9788e4';
 
 const AUREO_POOL_ABI = [
-    'function buyGold(uint256 _usdcAmount) external',
+    'function buyGold(uint256 _usdcAmount, uint256 _minGoldOut) external',
     'function getGoldPrice18Decimals() external view returns (uint256)',
     'event BuyGold(address indexed user, uint256 usdcSpent, uint256 goldReceived, uint256 priceUsed)',
 ];
@@ -100,8 +100,9 @@ async function executeSmartBuy(
         const approveTx = await usdc.approve(AUREO_POOL_ADDRESS, usdcAmountWei);
         await approveTx.wait();
 
-        // Execute buy gold
-        const buyTx = await aureoPool.buyGold(usdcAmountWei);
+        // Execute buy gold with slippage protection (0 = accept any amount for demo)
+        const minGoldOut = BigInt(0);
+        const buyTx = await aureoPool.buyGold(usdcAmountWei, minGoldOut);
         const receipt = await buyTx.wait();
 
         // Parse event to get gold received

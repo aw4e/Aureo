@@ -2,15 +2,14 @@
 
 import { usePrivy } from '@privy-io/react-auth';
 import { useRouter } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { MobileLayout } from '@/components/mobile-layout';
 import { WalletCard } from '@/components/wallet-card';
 import { QuickActions } from '@/components/quick-actions';
 import { DepositDialog } from '@/components/deposit-dialog';
 import { WithdrawDialog } from '@/components/withdraw-dialog';
-import { X402PaymentDialog, useX402Payment } from '@/components/x402-payment-dialog';
-
-import { x402Client, X402PaymentRequirement } from '@/lib/x402';
+import { useAureoContract } from '@/lib/hooks/useAureoContract';
+import { useTransactionHistory, formatTransactionDate } from '@/lib/hooks/useTransactionHistory';
 import {
   Bell,
   Settings,
@@ -18,110 +17,198 @@ import {
   Sparkles,
   ArrowUpRight,
   ArrowDownLeft,
-  Clock,
   ChevronRight,
   Loader2,
-  Zap,
-  Shield
+  RefreshCw,
+  Coins,
+  AlertCircle,
+  CheckCircle2,
+  ExternalLink
 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
-interface Transaction {
-  id: string;
-  type: 'deposit' | 'withdraw' | 'send' | 'receive' | 'ai_purchase';
-  amount: number;
-  unit: 'USDC' | 'gram';
-  timestamp: string;
-  status: 'completed' | 'pending';
-  description: string;
-}
-
-interface AIAnalysis {
-  action: 'BUY' | 'WAIT';
-  confidence: number;
-  reasoning: string;
-  currentPrice: number;
-  priceTarget: number;
-}
+// Reserve threshold - keep this much USDC liquid
+const RESERVE_THRESHOLD = 100;
 
 export default function DashboardPage() {
   const { ready, authenticated, user } = usePrivy();
   const router = useRouter();
 
-  const [goldBalance, setGoldBalance] = useState(2.450);
-  const [usdcBalance, setUsdcBalance] = useState(150.00);
-  const [goldPriceUSD] = useState(65.50);
-  const [aiStatus, setAiStatus] = useState<'ready' | 'analyzing' | 'buying' | 'bought'>('ready');
-  const [aiAnalysis, setAiAnalysis] = useState<AIAnalysis | null>(null);
+  // Real contract data
+  const {
+    balances,
+    isLoading: contractLoading,
+    error: contractError,
+    isConnected,
+    walletAddress,
+    fetchBalances,
+    buyGold,
+    sellGold,
+    mintTestUSDC,
+    contractAddresses
+  } = useAureoContract();
+
+  // Transaction history from blockchain
+  const {
+    transactions,
+    isLoading: txLoading,
+    refetch: refetchTx
+  } = useTransactionHistory(walletAddress);
+
+  // UI State
   const [showDepositDialog, setShowDepositDialog] = useState(false);
   const [showWithdrawDialog, setShowWithdrawDialog] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [notification, setNotification] = useState<{
+    type: 'success' | 'error' | 'info';
+    message: string;
+  } | null>(null);
+  const [isMinting, setIsMinting] = useState(false);
 
-  // x402 payment state
-  const x402 = useX402Payment();
-  const [x402Initialized, setX402Initialized] = useState(false);
-
-  const [transactions] = useState<Transaction[]>([
-    {
-      id: '1',
-      type: 'ai_purchase',
-      amount: 0.150,
-      unit: 'gram',
-      timestamp: '2 hours ago',
-      status: 'completed',
-      description: 'AI Smart Purchase (x402)',
-    },
-    {
-      id: '2',
-      type: 'deposit',
-      amount: 50.00,
-      unit: 'USDC',
-      timestamp: 'Yesterday',
-      status: 'completed',
-      description: 'Top Up',
-    },
-    {
-      id: '3',
-      type: 'send',
-      amount: 25.00,
-      unit: 'USDC',
-      timestamp: '2 days ago',
-      status: 'completed',
-      description: 'Sent to 0x742d...Fa89',
-    },
-    {
-      id: '4',
-      type: 'ai_purchase',
-      amount: 0.320,
-      unit: 'gram',
-      timestamp: '3 days ago',
-      status: 'completed',
-      description: 'AI Smart Purchase (x402)',
-    },
-  ]);
-
-  // Initialize x402 client
-  useEffect(() => {
-    async function initX402() {
-      if (user?.wallet?.address && !x402Initialized) {
-        try {
-          // Get wallet provider from Privy
-          const walletProvider = (window as unknown as { ethereum?: { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> } }).ethereum;
-          if (walletProvider) {
-            await x402Client.initialize(walletProvider);
-            setX402Initialized(true);
-          }
-        } catch (error) {
-          console.error('Failed to initialize x402 client:', error);
-        }
-      }
-    }
-    initX402();
-  }, [user?.wallet?.address, x402Initialized]);
+  // Auto-DCA state
+  const [autoDCAEnabled, setAutoDCAEnabled] = useState(true);
+  const [autoDCAStatus, setAutoDCAStatus] = useState<'idle' | 'checking' | 'converting' | 'done'>('idle');
 
   useEffect(() => {
     if (ready && !authenticated) {
       router.push('/');
     }
   }, [ready, authenticated, router]);
+
+  // Clear notification after 5 seconds
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => setNotification(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
+
+  // Auto-DCA: Check and convert excess USDC to Gold
+  const runAutoDCA = useCallback(async () => {
+    if (!autoDCAEnabled || !isConnected || contractLoading) return;
+
+    const excessUSDC = balances.usdc - RESERVE_THRESHOLD;
+
+    if (excessUSDC > 1) { // At least $1 to convert
+      setAutoDCAStatus('checking');
+
+      try {
+        setAutoDCAStatus('converting');
+        const result = await buyGold(excessUSDC);
+
+        if (result.success) {
+          setAutoDCAStatus('done');
+          setNotification({
+            type: 'success',
+            message: `Auto-converted $${excessUSDC.toFixed(2)} USDC to mGold`
+          });
+          await fetchBalances();
+          await refetchTx();
+          setTimeout(() => setAutoDCAStatus('idle'), 3000);
+        } else {
+          setNotification({
+            type: 'error',
+            message: result.error || 'Auto-DCA failed'
+          });
+          setAutoDCAStatus('idle');
+        }
+      } catch (error) {
+        console.error('Auto-DCA error:', error);
+        setAutoDCAStatus('idle');
+      }
+    }
+  }, [autoDCAEnabled, isConnected, contractLoading, balances.usdc, buyGold, fetchBalances, refetchTx]);
+
+  // Handle manual buy gold (from deposit dialog)
+  const handleBuyGold = async (amount: number) => {
+    setIsProcessing(true);
+    try {
+      const result = await buyGold(amount);
+      if (result.success) {
+        setNotification({
+          type: 'success',
+          message: `Successfully bought mGold with $${amount.toFixed(2)} USDC`
+        });
+        await fetchBalances();
+        await refetchTx();
+      } else {
+        setNotification({
+          type: 'error',
+          message: result.error || 'Transaction failed'
+        });
+      }
+    } catch (error) {
+      console.error('Buy gold error:', error);
+      setNotification({
+        type: 'error',
+        message: 'Transaction failed'
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Handle sell gold (from withdraw dialog)
+  const handleSellGold = async (goldAmount: number) => {
+    setIsProcessing(true);
+    try {
+      const result = await sellGold(goldAmount);
+      if (result.success) {
+        setNotification({
+          type: 'success',
+          message: `Successfully sold ${goldAmount.toFixed(6)} mGold`
+        });
+        await fetchBalances();
+        await refetchTx();
+      } else {
+        setNotification({
+          type: 'error',
+          message: result.error || 'Transaction failed'
+        });
+      }
+    } catch (error) {
+      console.error('Sell gold error:', error);
+      setNotification({
+        type: 'error',
+        message: 'Transaction failed'
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Handle mint test USDC
+  const handleMintTestUSDC = async () => {
+    setIsMinting(true);
+    try {
+      const result = await mintTestUSDC(500); // Mint 500 test USDC
+      if (result.success) {
+        setNotification({
+          type: 'success',
+          message: 'Received 500 test USDC!'
+        });
+        await fetchBalances();
+      } else {
+        setNotification({
+          type: 'error',
+          message: result.error || 'Mint failed'
+        });
+      }
+    } catch (error) {
+      console.error('Mint error:', error);
+      setNotification({
+        type: 'error',
+        message: 'Mint failed'
+      });
+    } finally {
+      setIsMinting(false);
+    }
+  };
+
+  // Calculate values
+  const goldValueUSD = balances.gold * balances.goldPrice;
+  const _totalPortfolioUSD = balances.usdc + goldValueUSD;
+  const excessUSDC = Math.max(0, balances.usdc - RESERVE_THRESHOLD);
 
   if (!ready || !authenticated) {
     return (
@@ -134,164 +221,70 @@ export default function DashboardPage() {
     );
   }
 
-  /**
-   * Request AI analysis via x402 protected endpoint
-   */
-  const requestAIAnalysis = async (depositAmount: number) => {
-    if (!x402Initialized) {
-      console.error('x402 client not initialized');
-      return null;
-    }
-
-    setAiStatus('analyzing');
-
-    try {
-      const analysis = await x402Client.requestWithPayment<{
-        success: boolean;
-        analysis: AIAnalysis;
-        x402Fee: number;
-      }>(
-        '/api/x402/analyze',
-        {
-          method: 'POST',
-          body: JSON.stringify({ depositAmount }),
-        },
-        async (requirement: X402PaymentRequirement) => {
-          return new Promise((resolve) => {
-            x402.requestPayment(requirement).then(resolve);
-          });
-        }
-      );
-
-      setAiAnalysis(analysis.analysis);
-      return analysis.analysis;
-    } catch (error) {
-      console.error('AI analysis failed:', error);
-      setAiStatus('ready');
-      return null;
-    }
-  };
-
-  /**
-   * Execute smart buy via x402 protected endpoint
-   */
-  const executeSmartBuy = async (usdcAmount: number) => {
-    if (!x402Initialized || !aiAnalysis || aiAnalysis.action !== 'BUY') {
-      return;
-    }
-
-    setAiStatus('buying');
-
-    try {
-      const result = await x402Client.requestWithPayment<{
-        success: boolean;
-        goldReceived: number;
-        txHash: string;
-        x402Fee: number;
-      }>(
-        '/api/x402/smart-buy',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            userAddress: user?.wallet?.address,
-            usdcAmount,
-            aiDecision: aiAnalysis,
-          }),
-        },
-        async (requirement: X402PaymentRequirement) => {
-          return new Promise((resolve) => {
-            x402.requestPayment(requirement).then(resolve);
-          });
-        }
-      );
-
-      if (result.success) {
-        setGoldBalance(prev => prev + result.goldReceived);
-        setUsdcBalance(prev => prev - usdcAmount);
-        setAiStatus('bought');
-        setTimeout(() => setAiStatus('ready'), 3000);
-      }
-    } catch (error) {
-      console.error('Smart buy failed:', error);
-      setAiStatus('ready');
-    }
-  };
-
-  const handleDeposit = async (amount: number) => {
-    setUsdcBalance(prev => prev + amount);
-
-    // Request AI analysis (x402 protected)
-    const analysis = await requestAIAnalysis(amount);
-
-    if (analysis?.action === 'BUY') {
-      // Execute smart buy (x402 protected)
-      await executeSmartBuy(amount);
-    } else {
-      // AI says wait
-      setAiStatus('ready');
-      setTimeout(() => {
-        // Simulate later execution
-        const goldBought = amount / goldPriceUSD;
-        setGoldBalance(prev => prev + goldBought);
-        setUsdcBalance(prev => prev - amount);
-        setAiStatus('bought');
-        setTimeout(() => setAiStatus('ready'), 2000);
-      }, 5000);
-    }
-  };
-
-  const handleWithdraw = (grams: number) => {
-    setGoldBalance(prev => prev - grams);
-    const usdcAmount = grams * goldPriceUSD;
-    setUsdcBalance(prev => prev + usdcAmount);
-  };
-
   const getTransactionIcon = (type: string) => {
     switch (type) {
-      case 'deposit':
+      case 'buy':
+      case 'transfer_in':
         return <ArrowDownLeft className="w-5 h-5 text-green-500" />;
-      case 'withdraw':
-      case 'send':
+      case 'sell':
+      case 'transfer_out':
         return <ArrowUpRight className="w-5 h-5 text-orange-500" />;
-      case 'receive':
-        return <ArrowDownLeft className="w-5 h-5 text-green-500" />;
-      case 'ai_purchase':
-        return <Sparkles className="w-5 h-5 text-amber-500" />;
       default:
-        return <Clock className="w-5 h-5 text-muted-foreground" />;
+        return <Sparkles className="w-5 h-5 text-amber-500" />;
     }
   };
 
   const getTransactionColor = (type: string) => {
     switch (type) {
-      case 'deposit':
-      case 'receive':
+      case 'buy':
+      case 'transfer_in':
         return 'bg-green-100 dark:bg-green-500/20';
-      case 'withdraw':
-      case 'send':
+      case 'sell':
+      case 'transfer_out':
         return 'bg-orange-100 dark:bg-orange-500/20';
-      case 'ai_purchase':
-        return 'bg-amber-100 dark:bg-amber-500/20';
       default:
-        return 'bg-muted';
+        return 'bg-amber-100 dark:bg-amber-500/20';
     }
   };
 
   return (
     <MobileLayout activeTab="home">
+      {/* Notification Toast */}
+      {notification && (
+        <div className={`fixed top-4 left-4 right-4 z-50 p-4 rounded-xl shadow-lg flex items-center gap-3 animate-fade-in ${notification.type === 'success'
+            ? 'bg-green-500 text-white'
+            : notification.type === 'error'
+              ? 'bg-red-500 text-white'
+              : 'bg-blue-500 text-white'
+          }`}>
+          {notification.type === 'success' && <CheckCircle2 className="w-5 h-5" />}
+          {notification.type === 'error' && <AlertCircle className="w-5 h-5" />}
+          <p className="text-sm font-medium flex-1">{notification.message}</p>
+        </div>
+      )}
+
       {/* Header */}
       <div className="bg-gradient-to-b from-primary/5 to-background px-4 pt-12 pb-6">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <p className="text-muted-foreground text-sm">Good morning 👋</p>
+            <p className="text-muted-foreground text-sm">Welcome back 👋</p>
             <h1 className="text-xl font-bold text-foreground">
               {user?.email?.address?.split('@')[0] || 'User'}
             </h1>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                fetchBalances();
+                refetchTx();
+              }}
+              disabled={contractLoading}
+              className="p-2.5 rounded-xl bg-muted hover:bg-secondary transition-colors"
+            >
+              <RefreshCw className={`w-5 h-5 text-foreground ${contractLoading ? 'animate-spin' : ''}`} />
+            </button>
             <button className="p-2.5 rounded-xl bg-muted hover:bg-secondary transition-colors relative">
               <Bell className="w-5 h-5 text-foreground" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />
             </button>
             <button
               onClick={() => router.push('/dashboard/profile')}
@@ -304,15 +297,23 @@ export default function DashboardPage() {
 
         {/* Wallet Card */}
         <WalletCard
-          balance={usdcBalance}
-          goldBalance={goldBalance}
-          goldPriceUSD={goldPriceUSD}
-          walletAddress={user?.wallet?.address}
+          balance={balances.usdc}
+          goldBalance={balances.gold}
+          goldPriceUSD={balances.goldPrice}
+          walletAddress={walletAddress}
           variant="gold"
         />
       </div>
 
       <div className="px-4 space-y-6 animate-fade-in">
+        {/* Error Display */}
+        {contractError && (
+          <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-4 flex items-center gap-3 text-red-600 dark:text-red-400">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <p className="text-sm">{contractError}</p>
+          </div>
+        )}
+
         {/* Quick Actions */}
         <div className="bg-card rounded-2xl p-4 border border-border shadow-sm">
           <QuickActions
@@ -321,83 +322,78 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* AI Status Card with x402 Badge */}
+        {/* Auto-DCA Status Card */}
         <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30 rounded-2xl p-4 border border-amber-200/50 dark:border-amber-800/30">
           <div className="flex items-start gap-3">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${aiStatus === 'analyzing' ? 'bg-blue-100 dark:bg-blue-500/20' :
-              aiStatus === 'buying' ? 'bg-purple-100 dark:bg-purple-500/20' :
-                aiStatus === 'bought' ? 'bg-green-100 dark:bg-green-500/20' :
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${autoDCAStatus === 'converting' ? 'bg-blue-100 dark:bg-blue-500/20' :
+                autoDCAStatus === 'done' ? 'bg-green-100 dark:bg-green-500/20' :
                   'bg-amber-100 dark:bg-amber-500/20'
               }`}>
-              <Sparkles className={`w-5 h-5 ${aiStatus === 'analyzing' ? 'text-blue-500 animate-pulse' :
-                aiStatus === 'buying' ? 'text-purple-500 animate-pulse' :
-                  aiStatus === 'bought' ? 'text-green-500' :
+              <Coins className={`w-5 h-5 ${autoDCAStatus === 'converting' ? 'text-blue-500 animate-pulse' :
+                  autoDCAStatus === 'done' ? 'text-green-500' :
                     'text-amber-500'
                 }`} />
             </div>
             <div className="flex-1">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <h3 className="font-semibold text-foreground">AI Agent</h3>
-                  {/* x402 Badge */}
-                  <div className="flex items-center gap-1 px-2 py-0.5 bg-primary/10 rounded-full">
-                    <Zap className="w-3 h-3 text-primary" />
-                    <span className="text-[10px] font-medium text-primary">x402</span>
-                  </div>
-                </div>
-                <span className={`text-xs px-2 py-1 rounded-full ${aiStatus === 'analyzing' ? 'bg-blue-100 text-blue-600 dark:bg-blue-500/20 dark:text-blue-400' :
-                  aiStatus === 'buying' ? 'bg-purple-100 text-purple-600 dark:bg-purple-500/20 dark:text-purple-400' :
-                    aiStatus === 'bought' ? 'bg-green-100 text-green-600 dark:bg-green-500/20 dark:text-green-400' :
-                      'bg-gray-100 text-gray-600 dark:bg-gray-500/20 dark:text-gray-400'
-                  }`}>
-                  {aiStatus === 'analyzing' ? 'Analyzing' :
-                    aiStatus === 'buying' ? 'Executing' :
-                      aiStatus === 'bought' ? 'Purchased' : 'Ready'}
-                </span>
+                <h3 className="font-semibold text-foreground">Auto Gold Savings</h3>
+                <button
+                  onClick={() => setAutoDCAEnabled(!autoDCAEnabled)}
+                  className={`w-12 h-7 rounded-full p-1 transition-colors ${autoDCAEnabled ? 'bg-primary' : 'bg-muted'}`}
+                >
+                  <div className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${autoDCAEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                </button>
               </div>
               <p className="text-sm text-muted-foreground mt-1">
-                {aiStatus === 'analyzing'
-                  ? 'Analyzing market for optimal entry point...'
-                  : aiStatus === 'buying'
-                    ? 'Executing smart buy via x402...'
-                    : aiStatus === 'bought'
-                      ? 'Successfully purchased gold at optimal price!'
-                      : 'Monitoring market 24/7 with x402-powered execution'
+                {autoDCAEnabled
+                  ? `Keep $${RESERVE_THRESHOLD} USDC liquid, convert rest to Gold`
+                  : 'Auto-conversion is disabled'
                 }
               </p>
-              {aiAnalysis && aiStatus !== 'ready' && (
-                <div className="mt-2 text-xs text-muted-foreground">
-                  <p>Confidence: {aiAnalysis.confidence}%</p>
-                  <p>{aiAnalysis.reasoning}</p>
-                </div>
-              )}
-              {(aiStatus === 'analyzing' || aiStatus === 'buying') && (
-                <div className="mt-3 h-1.5 bg-muted rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full animate-pulse ${aiStatus === 'buying' ? 'w-4/5 bg-gradient-to-r from-purple-500 to-purple-400' :
-                    'w-3/5 bg-gradient-to-r from-blue-500 to-blue-400'
-                    }`} />
+              {excessUSDC > 0 && autoDCAEnabled && (
+                <div className="mt-3">
+                  <p className="text-xs text-muted-foreground mb-2">
+                    ${excessUSDC.toFixed(2)} USDC available to convert
+                  </p>
+                  <Button
+                    onClick={runAutoDCA}
+                    disabled={autoDCAStatus === 'converting' || isProcessing}
+                    size="sm"
+                    className="bg-amber-500 hover:bg-amber-600 text-white"
+                  >
+                    {autoDCAStatus === 'converting' ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Converting...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-4 h-4 mr-2" />
+                        Convert to Gold Now
+                      </>
+                    )}
+                  </Button>
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {/* x402 Info Card */}
-        <div className="bg-card rounded-2xl p-4 border border-border shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-              <Shield className="w-5 h-5 text-primary" />
-            </div>
-            <div className="flex-1">
-              <h4 className="font-medium text-sm">x402 Protocol Active</h4>
-              <p className="text-xs text-muted-foreground">
-                Pay-per-use AI execution • $0.01-0.05 USDC per action
-              </p>
-            </div>
+        {/* Portfolio Summary */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-card rounded-2xl p-4 border border-border">
+            <p className="text-xs text-muted-foreground mb-1">mGold Balance</p>
+            <p className="text-xl font-bold text-foreground">{balances.gold.toFixed(6)}</p>
+            <p className="text-sm text-green-500">≈ ${goldValueUSD.toFixed(2)}</p>
+          </div>
+          <div className="bg-card rounded-2xl p-4 border border-border">
+            <p className="text-xs text-muted-foreground mb-1">USDC Balance</p>
+            <p className="text-xl font-bold text-foreground">${balances.usdc.toFixed(2)}</p>
+            <p className="text-sm text-muted-foreground">Liquid cash</p>
           </div>
         </div>
 
-        {/* Gold Price */}
+        {/* Gold Price Card */}
         <div className="bg-card rounded-2xl p-4 border border-border shadow-sm">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -405,17 +401,44 @@ export default function DashboardPage() {
                 <span className="text-white font-bold text-lg">Au</span>
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Gold Price</p>
+                <p className="text-sm text-muted-foreground">Gold Price (XAU/USD)</p>
                 <p className="text-xl font-bold text-foreground">
-                  ${goldPriceUSD.toFixed(2)}
-                  <span className="text-sm font-normal text-muted-foreground">/gram</span>
+                  ${balances.goldPrice.toFixed(2)}
+                  <span className="text-sm font-normal text-muted-foreground">/oz</span>
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-1 text-green-500 bg-green-100 dark:bg-green-500/20 px-2 py-1 rounded-lg">
               <TrendingUp className="w-4 h-4" />
-              <span className="text-sm font-medium">+1.2%</span>
+              <span className="text-sm font-medium">Live</span>
             </div>
+          </div>
+        </div>
+
+        {/* Faucet Card (Testnet Only) */}
+        <div className="bg-card rounded-2xl p-4 border border-border shadow-sm">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-500/20 flex items-center justify-center">
+                <Coins className="w-5 h-5 text-blue-500" />
+              </div>
+              <div>
+                <p className="font-medium">Testnet Faucet</p>
+                <p className="text-xs text-muted-foreground">Get free test USDC</p>
+              </div>
+            </div>
+            <Button
+              onClick={handleMintTestUSDC}
+              disabled={isMinting || !isConnected}
+              size="sm"
+              variant="outline"
+            >
+              {isMinting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                'Get 500 USDC'
+              )}
+            </Button>
           </div>
         </div>
 
@@ -433,35 +456,62 @@ export default function DashboardPage() {
           </div>
 
           <div className="divide-y divide-border">
-            {transactions.slice(0, 4).map((tx) => (
-              <div key={tx.id} className="transaction-item">
-                <div className={`transaction-icon ${getTransactionColor(tx.type)}`}>
-                  {getTransactionIcon(tx.type)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-foreground truncate">{tx.description}</p>
-                  <p className="text-sm text-muted-foreground">{tx.timestamp}</p>
-                </div>
-                <div className="text-right">
-                  <p className={`font-semibold ${tx.type === 'deposit' || tx.type === 'receive' || tx.type === 'ai_purchase'
-                    ? 'text-green-500'
-                    : 'text-foreground'
-                    }`}>
-                    {tx.type === 'deposit' || tx.type === 'receive' || tx.type === 'ai_purchase' ? '+' : '-'}
-                    {tx.amount.toFixed(tx.unit === 'gram' ? 3 : 2)} {tx.unit === 'gram' ? 'g' : 'USDC'}
-                  </p>
-                  <span className={`status-badge ${tx.status}`}>
-                    {tx.status === 'completed' ? 'Success' : 'Pending'}
-                  </span>
-                </div>
+            {txLoading ? (
+              <div className="p-8 text-center">
+                <Loader2 className="w-6 h-6 animate-spin text-primary mx-auto" />
               </div>
-            ))}
+            ) : transactions.length > 0 ? (
+              transactions.slice(0, 4).map((tx) => {
+                const { time } = formatTransactionDate(tx.timestamp);
+                return (
+                  <div key={tx.id} className="p-4 flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${getTransactionColor(tx.type)}`}>
+                      {getTransactionIcon(tx.type)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-foreground truncate">{tx.description}</p>
+                      <p className="text-sm text-muted-foreground">{time}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className={`font-semibold ${tx.type === 'buy' || tx.type === 'transfer_in' ? 'text-green-500' : 'text-foreground'}`}>
+                        {tx.type === 'buy' ? '+' : '-'}{tx.goldAmount?.toFixed(4)} mGold
+                      </p>
+                      <a
+                        href={`https://explorer.sepolia.mantle.xyz/tx/${tx.txHash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 justify-end"
+                      >
+                        View <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="p-8 text-center">
+                <Sparkles className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                <p className="text-muted-foreground text-sm">No transactions yet</p>
+                <p className="text-xs text-muted-foreground mt-1">Buy gold to get started!</p>
+              </div>
+            )}
           </div>
+        </div>
+
+        {/* Contract Info (Debug) */}
+        <div className="bg-muted/50 rounded-xl p-3 text-xs text-muted-foreground space-y-1">
+          <p className="font-medium">Network: Mantle Sepolia</p>
+          <p className="font-mono truncate">Pool: {contractAddresses.AUREO_POOL}</p>
+          <p className="font-mono truncate">Wallet: {walletAddress || 'Not connected'}</p>
         </div>
       </div>
 
       {/* Deposit Dialog */}
-      <DepositDialog onDeposit={handleDeposit}>
+      <DepositDialog
+        onDeposit={handleBuyGold}
+        usdcBalance={balances.usdc}
+        isLoading={isProcessing}
+      >
         <button
           ref={(el) => {
             if (showDepositDialog && el) {
@@ -475,9 +525,10 @@ export default function DashboardPage() {
 
       {/* Withdraw Dialog */}
       <WithdrawDialog
-        goldBalance={goldBalance}
-        goldPriceIDR={goldPriceUSD * 15000}
-        onWithdraw={handleWithdraw}
+        goldBalance={balances.gold}
+        goldPriceUSD={balances.goldPrice}
+        onWithdraw={handleSellGold}
+        isLoading={isProcessing}
       >
         <button
           ref={(el) => {
@@ -489,15 +540,6 @@ export default function DashboardPage() {
           className="hidden"
         />
       </WithdrawDialog>
-
-      {/* x402 Payment Dialog */}
-      <X402PaymentDialog
-        open={x402.showDialog}
-        onOpenChange={x402.setShowDialog}
-        requirement={x402.requirement}
-        onConfirm={x402.confirmPayment}
-        onCancel={x402.cancelPayment}
-      />
     </MobileLayout>
   );
 }

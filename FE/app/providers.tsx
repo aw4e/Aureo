@@ -1,6 +1,31 @@
 'use client';
 
 import { PrivyProvider } from '@privy-io/react-auth';
+import { MANTLE_SEPOLIA } from '@/lib/types';
+import React from 'react';
+
+// Mantle Sepolia chain configuration for Privy
+const mantleSepolia = {
+  id: MANTLE_SEPOLIA.chainId,
+  name: MANTLE_SEPOLIA.name,
+  network: 'mantle-sepolia',
+  nativeCurrency: MANTLE_SEPOLIA.nativeCurrency,
+  rpcUrls: {
+    default: {
+      http: [MANTLE_SEPOLIA.rpcUrl],
+    },
+    public: {
+      http: [MANTLE_SEPOLIA.rpcUrl],
+    },
+  },
+  blockExplorers: {
+    default: {
+      name: 'Mantle Sepolia Explorer',
+      url: MANTLE_SEPOLIA.explorerUrl,
+    },
+  },
+  testnet: true,
+};
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const privyAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID;
@@ -37,47 +62,43 @@ export function Providers({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const mantleSepolia = {
-    id: 5003,
-    name: 'Mantle Sepolia Testnet',
-    network: 'mantle-sepolia',
-    nativeCurrency: {
-      name: 'MNT',
-      symbol: 'MNT',
-      decimals: 18,
-    },
-    rpcUrls: {
-      default: {
-        http: ['https://rpc.sepolia.mantle.xyz'],
-      },
-      public: {
-        http: ['https://rpc.sepolia.mantle.xyz'],
-      },
-    },
-    blockExplorers: {
-      default: {
-        name: 'Mantle Sepolia Explorer',
-        url: 'https://explorer.sepolia.mantle.xyz',
-      },
-    },
-    testnet: true,
-  };
-
   return (
     <PrivyProvider
       appId={privyAppId}
       config={{
+        // Login methods - prioritize email for easy onboarding
         loginMethods: ['email', 'wallet', 'google'],
+
+        // Appearance customization
         appearance: {
           theme: 'light',
-          accentColor: '#0066FF',
+          accentColor: '#F59E0B', // Amber color to match Aureo branding
           logo: '/aureo-logo.png',
+          showWalletLoginFirst: false, // Email first for better UX
         },
+
+        // Chain configuration
         defaultChain: mantleSepolia,
         supportedChains: [mantleSepolia],
+
+        // Embedded wallet configuration
+        embeddedWallets: {
+          // Create wallet on signup for seamless experience
+          ethereum: {
+            createOnLogin: 'users-without-wallets',
+          },
+        },
+
+        // Legal information (optional)
+        legal: {
+          termsAndConditionsUrl: '/terms',
+          privacyPolicyUrl: '/privacy',
+        },
       }}
     >
-      {children}
+      <React.Fragment key="privy-children">
+        {children}
+      </React.Fragment>
     </PrivyProvider>
   );
 }

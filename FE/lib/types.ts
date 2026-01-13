@@ -1,7 +1,62 @@
-export interface TokenBalance {
+// ============================================
+// Aureo Smart Contract Types
+// ============================================
+
+export interface ContractAddresses {
+  AUREO_POOL: string;
+  M_GOLD: string;
+  M_USDC: string;
+}
+
+export interface WalletBalances {
   gold: number;
-  idrx: number;
-  idrxPending: number;
+  usdc: number;
+  goldPrice: number;
+  usdcAllowance: number;
+  goldAllowance: number;
+}
+
+export interface TransactionResult {
+  success: boolean;
+  txHash?: string;
+  error?: string;
+}
+
+// ABI Types
+export interface BuyGoldEvent {
+  user: string;
+  usdcSpent: bigint;
+  goldReceived: bigint;
+  priceUsed: bigint;
+}
+
+export interface SellGoldEvent {
+  user: string;
+  goldSold: bigint;
+  usdcReceived: bigint;
+  priceUsed: bigint;
+}
+
+// Transaction Types
+export interface GoldTransaction {
+  type: 'buy' | 'sell';
+  amount: number;
+  price: number;
+  timestamp: Date;
+  txHash: string;
+  status: 'pending' | 'confirmed' | 'failed';
+}
+
+// Deposit Types (for pending analysis)
+export interface Deposit {
+  depositId: string;
+  walletAddress: string;
+  amount: number;
+  status: 'pending' | 'analyzing' | 'completed' | 'failed';
+  aiAnalysis?: AIAnalysis;
+  goldReceived?: number;
+  txHash?: string;
+  createdAt: Date;
 }
 
 export interface AIAnalysis {
@@ -10,41 +65,30 @@ export interface AIAnalysis {
   reasoning: string;
   currentPrice: number;
   priceTarget: number;
-  timestamp: string;
+  timestamp: Date;
 }
 
-export interface DepositRequest {
-  walletAddress: string;
-  amount: number;
-  currency: 'IDRX';
+// Network Configuration
+export interface NetworkConfig {
+  chainId: number;
+  name: string;
+  rpcUrl: string;
+  explorerUrl: string;
+  nativeCurrency: {
+    name: string;
+    symbol: string;
+    decimals: number;
+  };
 }
 
-export interface DepositResponse {
-  depositId: string;
-  status: 'pending' | 'analyzing' | 'completed';
-  aiAnalysis?: AIAnalysis;
-  estimatedGoldAmount: number;
-}
-
-export interface SwapRequest {
-  depositId: string;
-  fromToken: 'IDRX';
-  toToken: 'GOLD';
-  amount: number;
-}
-
-export interface SwapResponse {
-  txHash: string;
-  goldReceived: number;
-  executionPrice: number;
-  timestamp: string;
-}
-
-export interface PriceData {
-  price: number;
-  high24h: number;
-  low24h: number;
-  change24h: number;
-  volatility: number;
-  timestamp: string;
-}
+export const MANTLE_SEPOLIA: NetworkConfig = {
+  chainId: 5003,
+  name: 'Mantle Sepolia Testnet',
+  rpcUrl: 'https://rpc.sepolia.mantle.xyz',
+  explorerUrl: 'https://explorer.sepolia.mantle.xyz',
+  nativeCurrency: {
+    name: 'MNT',
+    symbol: 'MNT',
+    decimals: 18,
+  },
+};

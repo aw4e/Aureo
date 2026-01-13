@@ -1,21 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getGoldBalance, getIDRXPending } from '@/lib/services/contractService';
+import { getGoldBalance, getUSDCBalance } from '@/lib/services/contractService';
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { walletAddress: string } }
+  { params }: { params: Promise<{ walletAddress: string }> }
 ) {
   try {
-    const [goldBalance, idrxPending] = await Promise.all([
-      getGoldBalance(params.walletAddress),
-      getIDRXPending(params.walletAddress),
+    const { walletAddress } = await params;
+
+    const [goldBalance, usdcBalance] = await Promise.all([
+      getGoldBalance(walletAddress),
+      getUSDCBalance(walletAddress),
     ]);
 
     return NextResponse.json({
       success: true,
       balances: {
         gold: goldBalance,
-        idrxPending,
+        usdc: usdcBalance,
       },
     });
   } catch (error) {

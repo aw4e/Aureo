@@ -91,7 +91,8 @@ export async function validateX402Payment(
             );
             const usdcWithSigner = usdcContract.connect(serviceWallet);
 
-            const tx = await usdcWithSigner.receiveWithAuthorization(
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const tx = await (usdcWithSigner as any).receiveWithAuthorization(
                 authorization.from,
                 authorization.to,
                 authorization.value,

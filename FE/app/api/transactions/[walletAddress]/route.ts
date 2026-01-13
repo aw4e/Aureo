@@ -3,13 +3,14 @@ import { deposits } from '../../deposits/route';
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { walletAddress: string } }
+  { params }: { params: Promise<{ walletAddress: string }> }
 ) {
   try {
+    const { walletAddress } = await params;
     const transactions = deposits
       .filter(
         (d) =>
-          d.walletAddress === params.walletAddress.toLowerCase() &&
+          d.walletAddress === walletAddress.toLowerCase() &&
           d.status === 'completed'
       )
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())

@@ -2,7 +2,7 @@
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { CheckCircle, Share2, Copy, Check } from 'lucide-react';
+import { CheckCircle, Share2, Copy, Check, ExternalLink } from 'lucide-react';
 import { useState, Suspense } from 'react';
 
 function SuccessContent() {
@@ -12,11 +12,35 @@ function SuccessContent() {
 
     const amount = searchParams.get('amount') || '0';
     const recipient = searchParams.get('to') || '';
+    const txHash = searchParams.get('tx') || '';
 
     const copyTxHash = async () => {
-        await navigator.clipboard.writeText('0x1234567890abcdef...');
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        if (txHash) {
+            await navigator.clipboard.writeText(txHash);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        }
+    };
+
+    const explorerUrl = `https://explorer.sepolia.mantle.xyz/tx/${txHash}`;
+
+    const shareReceipt = async () => {
+        const text = `I just sent $${parseFloat(amount).toFixed(2)} USDC on AUREO! 🪙\n\nView transaction: ${explorerUrl}`;
+
+        if (navigator.share) {
+            try {
+                await navigator.share({
+                    title: 'AUREO Payment Receipt',
+                    text,
+                    url: explorerUrl,
+                });
+            } catch {
+                // User cancelled or share failed, fallback to copy
+                await navigator.clipboard.writeText(text);
+            }
+        } else {
+            await navigator.clipboard.writeText(text);
+        }
     };
 
     return (
@@ -48,19 +72,38 @@ function SuccessContent() {
                 <div className="bg-muted rounded-2xl p-4 w-full max-w-sm space-y-3">
                     <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">To</span>
-                        <span className="font-mono">{recipient.slice(0, 8)}...{recipient.slice(-6)}</span>
+                        <span className="font-mono">
+                            {recipient.slice(0, 8)}...{recipient.slice(-6)}
+                        </span>
                     </div>
                     <div className="flex justify-between text-sm">
                         <span className="text-muted-foreground">Network</span>
                         <span>Mantle Sepolia</span>
                     </div>
-                    <div className="flex justify-between text-sm items-center">
-                        <span className="text-muted-foreground">Transaction</span>
-                        <button onClick={copyTxHash} className="flex items-center gap-1 text-primary">
-                            {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                            <span className="font-mono">0x1234...abcd</span>
-                        </button>
-                    </div>
+                    {txHash && (
+                        <div className="flex justify-between text-sm items-center">
+                            <span className="text-muted-foreground">Transaction</span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={copyTxHash}
+                                    className="flex items-center gap-1 text-primary hover:underline"
+                                >
+                                    {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                                    <span className="font-mono">
+                                        {txHash.slice(0, 6)}...{txHash.slice(-4)}
+                                    </span>
+                                </button>
+                                <a
+                                    href={explorerUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="p-1 hover:bg-background rounded"
+                                >
+                                    <ExternalLink className="w-4 h-4 text-primary" />
+                                </a>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -72,13 +115,32 @@ function SuccessContent() {
                 >
                     Back to Home
                 </Button>
-                <Button
-                    variant="outline"
-                    className="w-full py-6 rounded-2xl text-base"
-                >
-                    <Share2 className="w-5 h-5 mr-2" />
-                    Share Receipt
-                </Button>
+                {txHash && (
+                    <>
+                        <Button
+                            onClick={shareReceipt}
+                            variant="outline"
+                            className="w-full py-6 rounded-2xl text-base"
+                        >
+                            <Share2 className="w-5 h-5 mr-2" />
+                            Share Receipt
+                        </Button>
+                        <a
+                            href={explorerUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block"
+                        >
+                            <Button
+                                variant="ghost"
+                                className="w-full py-6 rounded-2xl text-base text-muted-foreground"
+                            >
+                                <ExternalLink className="w-5 h-5 mr-2" />
+                                View on Explorer
+                            </Button>
+                        </a>
+                    </>
+                )}
             </div>
         </div>
     );

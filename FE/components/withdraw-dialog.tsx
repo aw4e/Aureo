@@ -12,38 +12,50 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { TrendingUp, AlertCircle, Loader2 } from 'lucide-react';
+import { TrendingUp, AlertCircle, Loader2, ArrowDown } from 'lucide-react';
 
 interface WithdrawDialogProps {
   children: React.ReactNode;
   goldBalance: number;
-  goldPriceIDR: number;
+  goldPriceUSD: number;
   onWithdraw: (grams: number) => void;
+  isLoading?: boolean;
 }
 
-export function WithdrawDialog({ children, goldBalance, goldPriceIDR, onWithdraw }: WithdrawDialogProps) {
+export function WithdrawDialog({
+  children,
+  goldBalance,
+  goldPriceUSD,
+  onWithdraw,
+  isLoading = false
+}: WithdrawDialogProps) {
   const [open, setOpen] = useState(false);
-  const [grams, setGrams] = useState('');
+  const [amount, setAmount] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Convert IDR to USD (approximate)
-  const goldPriceUSD = goldPriceIDR / 15000;
-  const usdcAmount = parseFloat(grams) * goldPriceUSD;
-  const isValidAmount = parseFloat(grams) > 0 && parseFloat(grams) <= goldBalance;
+  const parsedAmount = parseFloat(amount) || 0;
+  const usdcToReceive = parsedAmount * goldPriceUSD;
+  const isValidAmount = parsedAmount > 0 && parsedAmount <= goldBalance;
 
   const quickPercentages = [25, 50, 75, 100];
 
-  const handleWithdraw = () => {
-    const withdrawGrams = parseFloat(grams);
-    if (isValidAmount) {
-      setIsProcessing(true);
-      setTimeout(() => {
-        onWithdraw(withdrawGrams);
-        setIsProcessing(false);
-        setOpen(false);
-        setGrams('');
-      }, 1000);
+  const handleWithdraw = async () => {
+    if (!isValidAmount) return;
+
+    setIsProcessing(true);
+    try {
+      await onWithdraw(parsedAmount);
+      setOpen(false);
+      setAmount('');
+    } catch (error) {
+      console.error('Withdraw error:', error);
+    } finally {
+      setIsProcessing(false);
     }
+  };
+
+  const handleMaxAmount = () => {
+    setAmount(goldBalance.toString());
   };
 
   return (
@@ -54,34 +66,48 @@ export function WithdrawDialog({ children, goldBalance, goldPriceIDR, onWithdraw
           <div className="w-14 h-14 rounded-2xl bg-amber-100 dark:bg-amber-500/20 flex items-center justify-center mb-4">
             <TrendingUp className="w-7 h-7 text-amber-500" />
           </div>
-          <DialogTitle className="text-xl">Withdraw</DialogTitle>
+          <DialogTitle className="text-xl">Sell Gold</DialogTitle>
           <DialogDescription className="leading-relaxed">
-            Convert your gold balance to USDC instantly at current market price.
+            Convert your mGold tokens to USDC at the current market price via Pyth Oracle.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-5 py-4">
+          {/* Available Balance */}
           <div className="bg-muted rounded-2xl p-4">
-            <div className="text-sm text-muted-foreground">Available Balance</div>
-            <div className="text-2xl font-bold mt-1">{goldBalance.toFixed(3)} g</div>
-            <div className="text-sm text-muted-foreground mt-1">
-              ≈ ${(goldBalance * goldPriceUSD).toFixed(2)} USDC
+            <div className="flex justify-between items-center">
+              <div>
+                <div className="text-sm text-muted-foreground">Available mGold</div>
+                <div className="text-2xl font-bold mt-1">{goldBalance.toFixed(6)}</div>
+                <div className="text-sm text-muted-foreground mt-1">
+                  ≈ ${(goldBalance * goldPriceUSD).toFixed(2)} USD
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleMaxAmount}
+                className="rounded-xl"
+              >
+                Max
+              </Button>
             </div>
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm font-medium">Amount (Grams)</label>
+            <label className="text-sm font-medium">Amount (mGold)</label>
             <div className="relative">
               <Input
                 type="number"
-                placeholder="0.000"
-                value={grams}
-                onChange={(e) => setGrams(e.target.value)}
-                className="pr-10 py-6 text-2xl font-semibold rounded-xl"
-                step="0.001"
+                placeholder="0.000000"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                className="pr-16 py-6 text-2xl font-semibold rounded-xl"
+                step="0.000001"
+                disabled={isProcessing || isLoading}
               />
-              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-lg font-medium text-muted-foreground">
-                g
+              <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
+                mGold
               </span>
             </div>
           </div>
@@ -89,52 +115,70 @@ export function WithdrawDialog({ children, goldBalance, goldPriceIDR, onWithdraw
           <div className="space-y-2">
             <label className="text-sm font-medium">Quick select</label>
             <div className="grid grid-cols-4 gap-2">
-              {quickPercentages.map((pct) => (
-                <Button
-                  key={pct}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setGrams(((goldBalance * pct) / 100).toFixed(3))}
-                  className={`font-medium rounded-xl py-5 ${grams === ((goldBalance * pct) / 100).toFixed(3)
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border hover:bg-muted'
-                    }`}
-                >
-                  {pct}%
-                </Button>
-              ))}
+              {quickPercentages.map((pct) => {
+                const pctAmount = (goldBalance * pct) / 100;
+                return (
+                  <Button
+                    key={pct}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setAmount(pctAmount.toFixed(6))}
+                    disabled={goldBalance === 0 || isProcessing || isLoading}
+                    className={`font-medium rounded-xl py-5 ${amount === pctAmount.toFixed(6)
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-border hover:bg-muted'
+                      }`}
+                  >
+                    {pct}%
+                  </Button>
+                );
+              })}
             </div>
           </div>
 
-          {grams && parseFloat(grams) > 0 && (
+          {/* Transaction Preview */}
+          {parsedAmount > 0 && (
             <>
-              <div className="bg-muted rounded-2xl p-4 space-y-3">
+              <div className="bg-muted rounded-2xl p-4 space-y-4">
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Gold to withdraw</span>
-                  <span className="font-medium">{parseFloat(grams).toFixed(3)} g</span>
+                  <span className="text-muted-foreground">mGold to sell</span>
+                  <span className="font-medium">{parsedAmount.toFixed(6)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Current price</span>
-                  <span className="font-medium">${goldPriceUSD.toFixed(2)}/g</span>
+                  <span className="font-medium">${goldPriceUSD.toFixed(2)}/mGold</span>
                 </div>
+
+                <div className="flex justify-center py-2">
+                  <ArrowDown className="w-5 h-5 text-muted-foreground" />
+                </div>
+
                 <div className="border-t border-border pt-3">
-                  <div className="flex justify-between">
+                  <div className="flex justify-between items-center">
                     <span className="font-medium">You will receive</span>
                     <span className="font-bold text-xl text-green-500">
-                      ${usdcAmount.toFixed(2)} USDC
+                      ${usdcToReceive.toFixed(2)} USDC
                     </span>
                   </div>
                 </div>
               </div>
 
-              {!isValidAmount && parseFloat(grams) > goldBalance && (
+              {/* Insufficient Balance Warning */}
+              {parsedAmount > goldBalance && (
                 <div className="flex items-center gap-2 text-red-500 text-sm bg-red-50 dark:bg-red-500/10 p-4 rounded-xl">
                   <AlertCircle className="w-5 h-5 shrink-0" />
                   <div>
                     <p className="font-medium">Insufficient Balance</p>
-                    <p className="text-red-400">You only have {goldBalance.toFixed(3)} grams.</p>
+                    <p className="text-red-400">You only have {goldBalance.toFixed(6)} mGold.</p>
                   </div>
                 </div>
+              )}
+
+              {/* Transaction Info */}
+              {isValidAmount && (
+                <p className="text-xs text-muted-foreground leading-relaxed px-1">
+                  The transaction will require 2 steps: approve mGold spending, then sell for USDC.
+                </p>
               )}
             </>
           )}
@@ -145,25 +189,25 @@ export function WithdrawDialog({ children, goldBalance, goldPriceIDR, onWithdraw
             variant="outline"
             onClick={() => {
               setOpen(false);
-              setGrams('');
+              setAmount('');
             }}
-            disabled={isProcessing}
+            disabled={isProcessing || isLoading}
             className="w-full sm:w-auto rounded-xl py-5"
           >
             Cancel
           </Button>
           <Button
             onClick={handleWithdraw}
-            disabled={!isValidAmount || isProcessing}
+            disabled={!isValidAmount || isProcessing || isLoading}
             className="w-full sm:w-auto bg-amber-500 hover:bg-amber-600 text-white rounded-xl py-5"
           >
-            {isProcessing ? (
+            {isProcessing || isLoading ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 Processing...
               </>
             ) : (
-              'Withdraw Now'
+              'Sell Gold'
             )}
           </Button>
         </DialogFooter>

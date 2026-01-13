@@ -3,10 +3,11 @@ import { deposits } from '../route';
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { depositId: string } }
+  { params }: { params: Promise<{ depositId: string }> }
 ) {
   try {
-    const deposit = deposits.find((d) => d.depositId === params.depositId);
+    const { depositId } = await params;
+    const deposit = deposits.find((d) => d.depositId === depositId);
 
     if (!deposit) {
       return NextResponse.json(
