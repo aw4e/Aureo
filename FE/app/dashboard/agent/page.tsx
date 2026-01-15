@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { usePrivy } from '@privy-io/react-auth';
 import { MobileLayout } from '@/components/mobile-layout';
 import { useAureoContract } from '@/lib/hooks/useAureoContract';
+import { useAgentSettings } from '@/lib/hooks/useAgentSettings';
 import { analyzeGoldMarket, chatWithAI, getMarketInsight, GoldMarketAnalysis } from '@/lib/services/aiService';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -23,7 +24,13 @@ import {
     Sparkles,
     MessageSquare,
     RefreshCw,
-    AlertCircle
+    AlertCircle,
+    Power,
+    Wifi,
+    WifiOff,
+    CloudOff,
+    CheckCircle2,
+    Save
 } from 'lucide-react';
 
 interface ChatMessage {
@@ -42,13 +49,26 @@ interface AnalysisHistory {
 
 export default function AgentPage() {
     const router = useRouter();
-    const { ready, authenticated } = usePrivy();
+    const { ready, authenticated, user } = usePrivy();
     const { balances, isLoading: contractLoading, buyGold } = useAureoContract();
+    
+    // Server-side Agent Settings (persists when offline)
+    const { 
+        settings: serverSettings, 
+        status: agentStatus,
+        isLoading: settingsLoading,
+        isSaving,
+        updateSettings,
+        refreshStatus 
+    } = useAgentSettings();
 
-    // Agent Settings
+    // Local Agent Settings (synced with server)
     const [minConfidence, setMinConfidence] = useState(70);
     const [autoExecute, setAutoExecute] = useState(false);
     const [riskLevel, setRiskLevel] = useState<'conservative' | 'moderate' | 'aggressive'>('moderate');
+    const [maxAmountPerTrade, setMaxAmountPerTrade] = useState(100);
+    const [agentEnabled, setAgentEnabled] = useState(false);
+    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
     // AI State
     const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -62,6 +82,47 @@ export default function AgentPage() {
     const [chatInput, setChatInput] = useState('');
     const [isChatting, setIsChatting] = useState(false);
     const [showChat, setShowChat] = useState(false);
+    
+    // Sync local state with server settings
+    useEffect(() => {
+        if (serverSettings) {
+            setMinConfidence(serverSettings.minConfidence);
+            setAutoExecute(serverSettings.autoExecute);
+            setRiskLevel(serverSettings.riskLevel);
+            setMaxAmountPerTrade(serverSettings.maxAmountPerTrade);
+            setAgentEnabled(serverSettings.enabled);
+        }
+    }, [serverSettings]);
+    
+    // Track unsaved changes
+    useEffect(() => {
+        if (serverSettings) {
+            const hasChanges = 
+                minConfidence !== serverSettings.minConfidence ||
+                autoExecute !== serverSettings.autoExecute ||
+                riskLevel !== serverSettings.riskLevel ||
+                maxAmountPerTrade !== serverSettings.maxAmountPerTrade ||
+                agentEnabled !== serverSettings.enabled;
+            setHasUnsavedChanges(hasChanges);
+        }
+    }, [minConfidence, autoExecute, riskLevel, maxAmountPerTrade, agentEnabled, serverSettings]);
+    
+    // Save settings to server
+    const saveSettings = useCallback(async () => {
+        try {
+            await updateSettings({
+                minConfidence,
+                autoExecute,
+                riskLevel,
+                maxAmountPerTrade,
+                enabled: agentEnabled,
+            });
+            setHasUnsavedChanges(false);
+            setError(null);
+        } catch (err) {
+            setError('Failed to save agent settings');
+        }
+    }, [updateSettings, minConfidence, autoExecute, riskLevel, maxAmountPerTrade, agentEnabled]);
 
     useEffect(() => {
         if (ready && !authenticated) {
@@ -373,69 +434,198 @@ export default function AgentPage() {
                     </div>
                 )}
 
-                {/* Agent Settings */}
-                <div className="bg-card rounded-2xl border border-border overflow-hidden">
-                    <div className="p-4 border-b border-border flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-                            <Sliders className="w-5 h-5 text-primary" />
-                        </div>
-                        <div>
-                            <h3 className="font-semibold">Agent Settings</h3>
-                            <p className="text-xs text-muted-foreground">Customize AI behavior</p>
-                        </div>
-                    </div>
-
-                    <div className="p-4 space-y-4">
-                        {/* Auto Execute Toggle */}
-                        <div className="flex items-center justify-between">
+                {/* Auto-Agent (Works Offline) */}
+                <div className={`rounded-2xl border-2 overflow-hidden transition-all ${agentEnabled && autoExecute ? 'border-green-500 bg-green-50/50 dark:bg-green-900/10' : 'border-border bg-card'}`}>
+                    <div className="p-4 border-b border-border flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${agentEnabled && autoExecute ? 'bg-green-100 dark:bg-green-500/20' : 'bg-primary/10'}`}>
+                                <Power className={`w-5 h-5 ${agentEnabled && autoExecute ? 'text-green-500' : 'text-primary'}`} />
+                            </div>
                             <div>
-                                <p className="font-medium text-sm">Auto Execute</p>
-                                <p className="text-xs text-muted-foreground">Auto-buy when confident</p>
+                                <h3 className="font-semibold flex items-center gap-2">
+                                    Auto-Agent
+                                    {agentEnabled && autoExecute && (
+                                        <span className="flex items-center gap-1 text-xs font-normal text-green-600 dark:text-green-400">
+                                            <Wifi className="w-3 h-3" />
+                                            Works Offline
+                                        </span>
+                                    )}
+                                </h3>
+                                <p className="text-xs text-muted-foreground">AI trades for you 24/7</p>
                             </div>
-                            <button
-                                onClick={() => setAutoExecute(!autoExecute)}
-                                className={`w-12 h-7 rounded-full p-1 transition-colors ${autoExecute ? 'bg-primary' : 'bg-muted'}`}
-                            >
-                                <div className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${autoExecute ? 'translate-x-5' : 'translate-x-0'}`} />
-                            </button>
+                        </div>
+                        <button
+                            onClick={() => {
+                                const newEnabled = !agentEnabled;
+                                setAgentEnabled(newEnabled);
+                                if (newEnabled) setAutoExecute(true);
+                            }}
+                            className={`w-12 h-7 rounded-full p-1 transition-colors ${agentEnabled ? 'bg-green-500' : 'bg-muted'}`}
+                        >
+                            <div className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${agentEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                    </div>
+
+                    {agentEnabled && (
+                        <div className="p-4 space-y-4 bg-gradient-to-b from-transparent to-green-50/30 dark:to-green-900/5">
+                            {/* How it works */}
+                            <div className="bg-white/50 dark:bg-white/5 rounded-xl p-3 text-xs text-muted-foreground">
+                                <p className="font-medium text-foreground mb-1">🤖 How Auto-Agent Works:</p>
+                                <ul className="space-y-1 list-disc list-inside">
+                                    <li>AI monitors gold market every 5 minutes</li>
+                                    <li>Automatically buys when confidence meets your threshold</li>
+                                    <li>Works even when you close the app</li>
+                                </ul>
+                            </div>
+
+                            {/* Auto Execute Toggle */}
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <p className="font-medium text-sm">Auto Execute Trades</p>
+                                    <p className="text-xs text-muted-foreground">Automatically buy gold when confident</p>
+                                </div>
+                                <button
+                                    onClick={() => setAutoExecute(!autoExecute)}
+                                    className={`w-12 h-7 rounded-full p-1 transition-colors ${autoExecute ? 'bg-primary' : 'bg-muted'}`}
+                                >
+                                    <div className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${autoExecute ? 'translate-x-5' : 'translate-x-0'}`} />
+                                </button>
+                            </div>
+
+                            {/* Max Amount Per Trade */}
+                            <div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <p className="font-medium text-sm">Max Amount Per Trade</p>
+                                    <span className="text-sm font-bold text-primary">${maxAmountPerTrade}</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="10"
+                                    max="1000"
+                                    step="10"
+                                    value={maxAmountPerTrade}
+                                    onChange={(e) => setMaxAmountPerTrade(parseInt(e.target.value))}
+                                    className="w-full h-2 bg-muted rounded-full appearance-none cursor-pointer accent-primary"
+                                />
+                                <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                                    <span>$10</span>
+                                    <span>$1000</span>
+                                </div>
+                            </div>
+
+                            {/* Minimum Confidence */}
+                            <div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <p className="font-medium text-sm">Minimum Confidence</p>
+                                    <span className="text-sm font-bold text-primary">{minConfidence}%</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="50"
+                                    max="95"
+                                    value={minConfidence}
+                                    onChange={(e) => setMinConfidence(parseInt(e.target.value))}
+                                    className="w-full h-2 bg-muted rounded-full appearance-none cursor-pointer accent-primary"
+                                />
+                            </div>
+
+                            {/* Risk Level */}
+                            <div>
+                                <p className="font-medium text-sm mb-2">Risk Level</p>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {(['conservative', 'moderate', 'aggressive'] as const).map((level) => (
+                                        <button
+                                            key={level}
+                                            onClick={() => setRiskLevel(level)}
+                                            className={`py-2 px-3 rounded-xl text-xs font-medium capitalize transition-colors ${riskLevel === level
+                                                ? 'bg-primary text-white'
+                                                : 'bg-muted text-foreground hover:bg-secondary'
+                                                }`}
+                                        >
+                                            {level}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Save Button */}
+                            {hasUnsavedChanges && (
+                                <Button
+                                    onClick={saveSettings}
+                                    disabled={isSaving}
+                                    className="w-full bg-green-500 hover:bg-green-600"
+                                >
+                                    {isSaving ? (
+                                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                                    ) : (
+                                        <Save className="w-4 h-4 mr-2" />
+                                    )}
+                                    Save & Activate Auto-Agent
+                                </Button>
+                            )}
+
+                            {/* Status */}
+                            {!hasUnsavedChanges && autoExecute && (
+                                <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    <span>Auto-Agent is active and monitoring</span>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {/* Agent Settings (when Auto-Agent is off) */}
+                {!agentEnabled && (
+                    <div className="bg-card rounded-2xl border border-border overflow-hidden">
+                        <div className="p-4 border-b border-border flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                                <Sliders className="w-5 h-5 text-primary" />
+                            </div>
+                            <div>
+                                <h3 className="font-semibold">Manual Settings</h3>
+                                <p className="text-xs text-muted-foreground">For manual analysis mode</p>
+                            </div>
                         </div>
 
-                        {/* Minimum Confidence */}
-                        <div>
-                            <div className="flex items-center justify-between mb-2">
-                                <p className="font-medium text-sm">Minimum Confidence</p>
-                                <span className="text-sm font-bold text-primary">{minConfidence}%</span>
+                        <div className="p-4 space-y-4">
+                            {/* Minimum Confidence */}
+                            <div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <p className="font-medium text-sm">Minimum Confidence</p>
+                                    <span className="text-sm font-bold text-primary">{minConfidence}%</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="50"
+                                    max="95"
+                                    value={minConfidence}
+                                    onChange={(e) => setMinConfidence(parseInt(e.target.value))}
+                                    className="w-full h-2 bg-muted rounded-full appearance-none cursor-pointer accent-primary"
+                                />
                             </div>
-                            <input
-                                type="range"
-                                min="50"
-                                max="95"
-                                value={minConfidence}
-                                onChange={(e) => setMinConfidence(parseInt(e.target.value))}
-                                className="w-full h-2 bg-muted rounded-full appearance-none cursor-pointer accent-primary"
-                            />
-                        </div>
 
-                        {/* Risk Level */}
-                        <div>
-                            <p className="font-medium text-sm mb-2">Risk Level</p>
-                            <div className="grid grid-cols-3 gap-2">
-                                {(['conservative', 'moderate', 'aggressive'] as const).map((level) => (
-                                    <button
-                                        key={level}
-                                        onClick={() => setRiskLevel(level)}
-                                        className={`py-2 px-3 rounded-xl text-xs font-medium capitalize transition-colors ${riskLevel === level
-                                            ? 'bg-primary text-white'
-                                            : 'bg-muted text-foreground hover:bg-secondary'
-                                            }`}
-                                    >
-                                        {level}
-                                    </button>
-                                ))}
+                            {/* Risk Level */}
+                            <div>
+                                <p className="font-medium text-sm mb-2">Risk Level</p>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {(['conservative', 'moderate', 'aggressive'] as const).map((level) => (
+                                        <button
+                                            key={level}
+                                            onClick={() => setRiskLevel(level)}
+                                            className={`py-2 px-3 rounded-xl text-xs font-medium capitalize transition-colors ${riskLevel === level
+                                                ? 'bg-primary text-white'
+                                                : 'bg-muted text-foreground hover:bg-secondary'
+                                                }`}
+                                        >
+                                            {level}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
+                )}
 
                 {/* AI Chat */}
                 <div className="bg-card rounded-2xl border border-border overflow-hidden">

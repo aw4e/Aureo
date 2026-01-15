@@ -78,21 +78,34 @@ ANALYZE and respond in this exact JSON format only (no markdown, just JSON):
       model: "gemini-2.5-flash",
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 500,
+        maxOutputTokens: 8192, // Increased to accommodate thinking tokens
       },
     });
 
     const result = await model.generateContent(prompt);
     const response = await result.response;
+    
+    // Check if response was truncated
+    const finishReason = result.response.candidates?.[0]?.finishReason;
+    if (finishReason === 'MAX_TOKENS') {
+      console.warn('AI response was truncated due to MAX_TOKENS');
+    }
+    
     const text = response.text();
 
     // Parse JSON from response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      throw new Error('Invalid AI response format');
+      throw new Error('Invalid AI response format - no JSON found');
     }
-
-    const analysis = JSON.parse(jsonMatch[0]) as GoldMarketAnalysis;
+    
+    let analysis: GoldMarketAnalysis;
+    try {
+      analysis = JSON.parse(jsonMatch[0]) as GoldMarketAnalysis;
+    } catch (parseError) {
+      console.error('JSON Parse Error:', parseError, 'Raw text:', text);
+      throw new Error('Failed to parse AI response JSON');
+    }
 
     // Validate and sanitize response
     return {
@@ -148,7 +161,7 @@ If asked about predictions, be cautious and mention that past performance doesn'
       model: "gemini-2.5-flash",
       generationConfig: {
         temperature: 0.8,
-        maxOutputTokens: 300,
+        maxOutputTokens: 2048, // Increased to accommodate thinking tokens
       },
     });
 
@@ -173,7 +186,7 @@ Focus on actionable information for investors. Be concise and professional.`;
       model: "gemini-2.5-flash",
       generationConfig: {
         temperature: 0.6,
-        maxOutputTokens: 100,
+        maxOutputTokens: 1024, // Increased to accommodate thinking tokens
       },
     });
 

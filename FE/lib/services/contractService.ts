@@ -782,6 +782,44 @@ export async function getGoldAllowance(userAddress: string): Promise<number> {
   }
 }
 
+/**
+ * Get all user balances in one call (optimized for server-side use)
+ * Used by the AI agent cron job
+ * @param userAddress The wallet address to check
+ * @returns Object containing gold, usdc, and goldPrice
+ */
+export async function getUserBalances(userAddress: string): Promise<{
+  gold: number;
+  usdc: number;
+  goldPrice: number;
+}> {
+  const provider = new ethers.JsonRpcProvider(RPC_URL);
+  
+  const mGoldContract = new ethers.Contract(M_GOLD_ADDRESS, M_GOLD_ABI, provider);
+  const usdcContract = new ethers.Contract(M_USDC_ADDRESS, M_USDC_ABI, provider);
+  const aureoContract = new ethers.Contract(AUREO_POOL_ADDRESS, AUREO_POOL_ABI, provider);
+
+  try {
+    const [goldBalanceRaw, usdcBalanceRaw, usdcDecimals, goldPriceRaw] = await Promise.all([
+      mGoldContract.balanceOf(userAddress),
+      usdcContract.balanceOf(userAddress),
+      usdcContract.decimals(),
+      aureoContract.getGoldPrice18Decimals().catch(() => null),
+    ]);
+
+    const gold = Number(ethers.formatUnits(goldBalanceRaw, 18));
+    const usdc = Number(ethers.formatUnits(usdcBalanceRaw, usdcDecimals));
+    const goldPrice = goldPriceRaw 
+      ? Number(ethers.formatUnits(goldPriceRaw, 18))
+      : FALLBACK_GOLD_PRICE;
+
+    return { gold, usdc, goldPrice };
+  } catch (error) {
+    console.error("Get User Balances Error:", error);
+    return { gold: 0, usdc: 0, goldPrice: FALLBACK_GOLD_PRICE };
+  }
+}
+
 // Export contract addresses for external use
 export const CONTRACT_ADDRESSES = {
   AUREO_POOL: AUREO_POOL_ADDRESS,

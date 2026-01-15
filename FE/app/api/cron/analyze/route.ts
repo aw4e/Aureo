@@ -1,57 +1,62 @@
+/**
+ * Cron Job: AI Agent Auto-Analysis & Execution
+ * 
+ * This endpoint is designed to be called by a cron scheduler (e.g., Vercel Cron)
+ * to run AI analysis and execute trades for users who have auto-agent enabled.
+ * 
+ * Key features:
+ * - Runs even when users are offline
+ * - Respects user's agent settings (minConfidence, riskLevel, maxAmount)
+ * - Uses shared store for settings persistence
+ * - Logs all executions for transparency
+ * 
+ * Setup:
+ * 1. Set CRON_SECRET in environment variables
+ * 2. Set AI_AGENT_PRIVATE_KEY for server-side execution
+ * 3. Configure cron job to call GET /api/cron/analyze with Authorization: Bearer <CRON_SECRET>
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
-import { deposits } from '../../deposits/route';
 import { analyzeGoldMarket } from '@/lib/services/aiService';
-import { getGoldPrice, CONTRACT_ADDRESSES } from '@/lib/services/contractService';
+import { getUserBalances, CONTRACT_ADDRESSES } from '@/lib/services/contractService';
+import { 
+  agentStore, 
+  AgentSettings, 
+  ExecutionLog,
+  getAllActiveAgents,
+  addExecutionLog 
+} from '@/lib/stores/agentStore';
 import { ethers } from 'ethers';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 // Server-side wallet for executing smart buys
-// Note: This requires CONTRACT_PRIVATE_KEY to be set in environment
-const PRIVATE_KEY = process.env.CONTRACT_PRIVATE_KEY;
+const PRIVATE_KEY = process.env.AI_AGENT_PRIVATE_KEY || process.env.CONTRACT_PRIVATE_KEY;
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || 'https://rpc.sepolia.mantle.xyz';
 
-// Minimal ABI for buyGold function
-const AUREO_POOL_BUY_ABI = [
-  {
-    "inputs": [{ "internalType": "uint256", "name": "_usdcAmount", "type": "uint256" }],
-    "name": "buyGold",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  }
+// Minimal ABIs
+const AUREO_POOL_ABI = [
+  'function buyGold(uint256 _usdcAmount, uint256 _minGoldOut) external',
+  'function getGoldPrice18Decimals() external view returns (uint256)',
 ];
 
-const USDC_APPROVE_ABI = [
-  {
-    "inputs": [
-      { "internalType": "address", "name": "spender", "type": "address" },
-      { "internalType": "uint256", "name": "value", "type": "uint256" }
-    ],
-    "name": "approve",
-    "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "decimals",
-    "outputs": [{ "internalType": "uint8", "name": "", "type": "uint8" }],
-    "stateMutability": "view",
-    "type": "function"
-  }
+const USDC_ABI = [
+  'function approve(address spender, uint256 value) external returns (bool)',
+  'function balanceOf(address account) external view returns (uint256)',
+  'function decimals() external view returns (uint8)',
 ];
 
 /**
- * Server-side smart buy execution
- * This is used by the cron job to execute trades on behalf of users
+ * Execute smart buy for a specific user wallet
+ * Note: In production, this would use delegated execution or x402
  */
-async function executeSmartBuyServerSide(
+async function executeSmartBuyForUser(
+  userAddress: string,
   usdcAmount: number
-): Promise<{ txHash: string; goldPrice: number }> {
+): Promise<{ txHash: string; goldPrice: number; goldReceived: number }> {
   if (!PRIVATE_KEY) {
-    throw new Error('CONTRACT_PRIVATE_KEY not configured for server-side execution');
+    throw new Error('AI_AGENT_PRIVATE_KEY not configured for server-side execution');
   }
 
   const provider = new ethers.JsonRpcProvider(RPC_URL);
@@ -59,47 +64,159 @@ async function executeSmartBuyServerSide(
 
   const aureoContract = new ethers.Contract(
     CONTRACT_ADDRESSES.AUREO_POOL,
-    AUREO_POOL_BUY_ABI,
+    AUREO_POOL_ABI,
     wallet
   );
 
   const usdcContract = new ethers.Contract(
     CONTRACT_ADDRESSES.M_USDC,
-    USDC_APPROVE_ABI,
+    USDC_ABI,
     wallet
   );
 
+  // Get current price and decimals
+  const [goldPrice, decimals] = await Promise.all([
+    aureoContract.getGoldPrice18Decimals(),
+    usdcContract.decimals(),
+  ]);
+
+  const priceUSD = Number(ethers.formatUnits(goldPrice, 18));
+  const amountInWei = ethers.parseUnits(usdcAmount.toString(), decimals);
+
+  // Approve and execute
+  const approveTx = await usdcContract.approve(CONTRACT_ADDRESSES.AUREO_POOL, amountInWei);
+  await approveTx.wait();
+
+  const minGoldOut = BigInt(0); // Accept any amount for demo
+  const tx = await aureoContract.buyGold(amountInWei, minGoldOut);
+  const receipt = await tx.wait();
+
+  // Estimate gold received
+  const goldReceived = usdcAmount / priceUSD;
+
+  console.log(`✅ Smart buy executed for ${userAddress.slice(0, 10)}...`, {
+    usdcSpent: usdcAmount,
+    goldReceived: goldReceived.toFixed(6),
+    txHash: receipt.hash,
+  });
+
+  return {
+    txHash: receipt.hash,
+    goldPrice: priceUSD,
+    goldReceived,
+  };
+}
+
+/**
+ * Process a single agent
+ */
+async function processAgent(settings: AgentSettings): Promise<ExecutionLog> {
+  const executionId = `EXEC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+  
+  console.log(`🤖 Processing agent for ${settings.walletAddress.slice(0, 10)}...`);
+  
   try {
-    // Get USDC decimals and current gold price
-    const [decimals, goldPrice] = await Promise.all([
-      usdcContract.decimals(),
-      getGoldPrice(),
-    ]);
+    // Get user's balances
+    const balances = await getUserBalances(settings.walletAddress);
+    
+    if (balances.usdc <= 0) {
+      const log: ExecutionLog = {
+        id: executionId,
+        walletAddress: settings.walletAddress,
+        action: 'WAIT',
+        confidence: 0,
+        reasoning: 'No USDC balance available',
+        status: 'skipped',
+        timestamp: new Date(),
+      };
+      addExecutionLog(log);
+      return log;
+    }
 
-    const amountInWei = ethers.parseUnits(usdcAmount.toString(), decimals);
+    // Determine trade amount (respect maxAmountPerTrade)
+    const tradeAmount = Math.min(balances.usdc, settings.maxAmountPerTrade);
 
-    // Approve USDC spending
-    const approveTx = await usdcContract.approve(
-      CONTRACT_ADDRESSES.AUREO_POOL,
-      amountInWei
-    );
-    await approveTx.wait();
+    // Run AI analysis
+    const analysis = await analyzeGoldMarket(tradeAmount, settings.riskLevel);
 
-    // Execute buyGold
-    const tx = await aureoContract.buyGold(amountInWei);
-    const receipt = await tx.wait();
+    console.log(`📊 AI Analysis for ${settings.walletAddress.slice(0, 10)}:`, {
+      action: analysis.action,
+      confidence: analysis.confidence,
+      minRequired: settings.minConfidence,
+    });
 
-    return {
-      txHash: receipt.hash,
-      goldPrice,
+    // Check if we should execute
+    const shouldExecute = 
+      analysis.action === 'BUY' && 
+      analysis.confidence >= settings.minConfidence &&
+      settings.autoExecute;
+
+    if (!shouldExecute) {
+      const reason = analysis.action !== 'BUY' 
+        ? `AI recommends ${analysis.action}`
+        : `Confidence ${analysis.confidence}% below threshold ${settings.minConfidence}%`;
+      
+      const log: ExecutionLog = {
+        id: executionId,
+        walletAddress: settings.walletAddress,
+        action: analysis.action === 'BUY' ? 'BUY' : 'WAIT',
+        confidence: analysis.confidence,
+        reasoning: reason,
+        status: 'skipped',
+        timestamp: new Date(),
+      };
+      addExecutionLog(log);
+      return log;
+    }
+
+    // Execute the trade
+    // Note: In current implementation, SERVER wallet executes the trade
+    // In production: Use delegated execution, session keys, or x402
+    const result = await executeSmartBuyForUser(settings.walletAddress, tradeAmount);
+
+    const log: ExecutionLog = {
+      id: executionId,
+      walletAddress: settings.walletAddress,
+      action: 'BUY',
+      confidence: analysis.confidence,
+      reasoning: analysis.reasoning,
+      amount: tradeAmount,
+      txHash: result.txHash,
+      status: 'executed',
+      timestamp: new Date(),
     };
+    addExecutionLog(log);
+    return log;
+
   } catch (error) {
-    console.error('Server-side Smart Buy Error:', error);
-    throw error;
+    console.error(`❌ Agent execution failed for ${settings.walletAddress}:`, error);
+    const log: ExecutionLog = {
+      id: executionId,
+      walletAddress: settings.walletAddress,
+      action: 'WAIT',
+      confidence: 0,
+      reasoning: `Execution failed: ${(error as Error).message}`,
+      status: 'failed',
+      timestamp: new Date(),
+    };
+    addExecutionLog(log);
+    return log;
   }
 }
 
+/**
+ * Main cron handler
+ * 
+ * Security: Protected by CRON_SECRET
+ * Frequency: Recommended every 5 minutes
+ * 
+ * Call with: GET /api/cron/analyze
+ * Headers: Authorization: Bearer <CRON_SECRET>
+ */
 export async function GET(req: NextRequest) {
+  const startTime = Date.now();
+  
+  // Verify authorization
   const authHeader = req.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET || 'hackathon-demo-secret';
 
@@ -108,80 +225,112 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const pendingDeposits = deposits.filter(
-      (d) => d.status === 'pending' || d.status === 'analyzing'
-    );
+    // Get all active agents
+    const activeAgentsList = getAllActiveAgents();
 
-    if (pendingDeposits.length === 0) {
+    console.log(`\n🔄 Cron job started at ${new Date().toISOString()}`);
+    console.log(`📋 Active agents: ${activeAgentsList.length}`);
+
+    if (activeAgentsList.length === 0) {
       return NextResponse.json({
         success: true,
-        message: 'No pending deposits to analyze',
+        message: 'No active agents to process',
         processed: 0,
+        timestamp: new Date().toISOString(),
       });
     }
 
-    const results = [];
-
-    for (const deposit of pendingDeposits) {
-      try {
-        deposit.status = 'analyzing';
-
-        const aiDecision = await analyzeGoldMarket(deposit.amount);
-
-        deposit.aiAnalysis = {
-          action: aiDecision.action === 'SELL' ? 'WAIT' : aiDecision.action as 'BUY' | 'WAIT',
-          confidence: aiDecision.confidence,
-          reasoning: aiDecision.reasoning,
-          currentPrice: aiDecision.currentPrice,
-          priceTarget: aiDecision.priceTarget,
-          timestamp: new Date(),
-        };
-
-        if (aiDecision.action === 'BUY' && aiDecision.confidence >= 70) {
-          const result = await executeSmartBuyServerSide(deposit.amount);
-
-          // Estimate gold received based on price
-          const estimatedGoldReceived = deposit.amount / result.goldPrice;
-
-          deposit.status = 'completed';
-          deposit.goldReceived = estimatedGoldReceived;
-          deposit.txHash = result.txHash;
-
-          results.push({
-            depositId: deposit.depositId,
-            action: 'BUY_EXECUTED',
-            goldReceived: estimatedGoldReceived,
-            txHash: result.txHash,
-          });
-        } else {
-          results.push({
-            depositId: deposit.depositId,
-            action: 'WAITING',
-            reasoning: aiDecision.reasoning,
-          });
-        }
-      } catch (error) {
-        console.error(`Error processing deposit ${deposit.depositId}:`, error);
-        deposit.status = 'failed';
-
-        results.push({
-          depositId: deposit.depositId,
-          action: 'FAILED',
-          error: String(error),
-        });
-      }
+    // Process all agents
+    const results: ExecutionLog[] = [];
+    for (const agent of activeAgentsList) {
+      const result = await processAgent(agent);
+      results.push(result);
     }
+
+    // Update last cron run time
+    agentStore.setLastCronRun(new Date());
+
+    // Summary
+    const summary = {
+      totalProcessed: results.length,
+      executed: results.filter(r => r.status === 'executed').length,
+      skipped: results.filter(r => r.status === 'skipped').length,
+      failed: results.filter(r => r.status === 'failed').length,
+      durationMs: Date.now() - startTime,
+    };
+
+    console.log(`\n✨ Cron job completed:`, summary);
 
     return NextResponse.json({
       success: true,
-      processed: results.length,
-      results,
+      timestamp: new Date().toISOString(),
+      summary,
+      results: results.map(r => ({
+        wallet: r.walletAddress.slice(0, 10) + '...',
+        action: r.action,
+        confidence: r.confidence,
+        status: r.status,
+        txHash: r.txHash?.slice(0, 20),
+      })),
     });
+
   } catch (error) {
-    console.error('Cron Job Error:', error);
+    console.error('❌ Cron Job Error:', error);
     return NextResponse.json(
-      { error: 'Cron job failed' },
+      { error: 'Cron job failed', details: (error as Error).message },
       { status: 500 }
+    );
+  }
+}
+
+/**
+ * POST - Manual trigger for testing
+ * 
+ * Can be used to:
+ * 1. Manually trigger the cron job
+ * 2. Get current state of all agents
+ */
+export async function POST(req: NextRequest) {
+  const authHeader = req.headers.get('authorization');
+  const cronSecret = process.env.CRON_SECRET || 'hackathon-demo-secret';
+
+  if (authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const body = await req.json().catch(() => ({}));
+    const { action } = body;
+
+    if (action === 'trigger') {
+      // Trigger the cron job manually
+      const response = await GET(req);
+      return response;
+    }
+
+    // Default: return current state
+    const activeAgents = getAllActiveAgents();
+    const recentLogs = agentStore.getExecutionLogs(undefined, 20);
+
+    return NextResponse.json({
+      success: true,
+      state: {
+        activeAgentsCount: activeAgents.length,
+        activeAgents: activeAgents.map(a => ({
+          wallet: a.walletAddress.slice(0, 10) + '...',
+          minConfidence: a.minConfidence,
+          riskLevel: a.riskLevel,
+          maxAmount: a.maxAmountPerTrade,
+        })),
+        recentExecutions: recentLogs.slice(0, 10),
+        lastCronRun: agentStore.getLastCronRun()?.toISOString() || null,
+      },
+    });
+
+  } catch (error) {
+    return NextResponse.json(
+      { error: 'Invalid request' },
+      { status: 400 }
     );
   }
 }
